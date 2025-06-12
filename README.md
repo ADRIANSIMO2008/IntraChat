@@ -46,7 +46,7 @@
     
 4. Run the server:
     ```bash
-    python megachat.py
+    python intrachat.py
     ```
 
 5. Open [http://localhost:5000](http://localhost:5000) in your browser.
@@ -55,7 +55,7 @@
 
 ## 📁 Project Structure
 
- - megachat.py # Main Flask app
+ - intrachat.py # Main Flask app
  - /templates/ # Jinja2 HTML templates
  - /static/ # JS, CSS, assets
  - /uploads/ # File uploads
