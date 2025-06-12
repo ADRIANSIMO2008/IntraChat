@@ -79,6 +79,7 @@
 
 - Best suited for internal networks (school, workplace, LAN)  
 - All messages are monitored and system notifications are automated
+- Default user is System and password is system
 
 ---
 
