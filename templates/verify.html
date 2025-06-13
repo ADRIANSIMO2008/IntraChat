@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>User Verification</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        form {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        input[type="text"] {
+            width: calc(100% - 22px);
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+        input[type="submit"] {
+            background-color: #28a745;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        input[type="submit"]:hover {
+            background-color: #218838;
+        }
+    </style>
+</head>
+<body>
+    <h1 style="color: red; text-align: center;">⚠️ SUSPICIOUS ACTIVITY ⚠️, PLEASE VERIFY:</h1>
+    <form method="post">
+        <h2 style="text-align: center;">Solve the quadratic equation:</h2>
+        <p style="font-size: xx-large; text-align: center;">{{ a }}x² + {{ b }}x + {{ c }} = 0</p>
+        <label for="roots">Enter roots separated by comma:</label><br>
+        <input type="text" name="roots" required placeholder="E.g. -2, 3.5"><br><br>
+        <input type="submit" value="Verify" style="display: block; margin: 0 auto;">
+    </form>
+</body>
+</html>

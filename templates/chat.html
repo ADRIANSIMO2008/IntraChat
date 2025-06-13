@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>1.C Chat</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/x-icon" href="static/favicon.ico" />
+  <link rel="stylesheet" href="static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+  <script>
+    localStorage.setItem("username", "{{ username }}");
+    localStorage.setItem("is_admin", "{{ 'True' if session['is_admin'] else 'False' }}");
+
+    const socket = io();
+
+    function sendMessage() {
+      let message = document.getElementById("message").value.trim();
+      if (message !== "") {
+        // Handle GIF links
+        const gifPattern = /(https?:\/\/[^\s]+\.gif)/gi;
+        if (gifPattern.test(message)) {
+          message = message.replace(gifPattern, function(match) {
+            return `<img src="${match}" alt="GIF">`;
+          });
+        }
+
+        socket.emit("message", message);
+        document.getElementById("message").value = "";
+      }
+    }
+
+    function uploadFile() {
+      var fileInput = document.getElementById("fileInput");
+      var file = fileInput.files[0];
+      if (!file) return;
+      
+      // Show upload indicator
+      const chat = document.getElementById("chat");
+      const uploadIndicator = document.createElement("div");
+      uploadIndicator.className = "message system";
+      uploadIndicator.id = "upload-indicator";
+      uploadIndicator.innerText = "Nahrávam súbor...";
+      chat.appendChild(uploadIndicator);
+      chat.scrollTop = chat.scrollHeight;
+      
+      var formData = new FormData();
+      formData.append("file", file);
+      
+      fetch("/upload", { method: "POST", body: formData })
+          .then(response => response.json())
+          .then(data => {
+              // Remove upload indicator
+              document.getElementById("upload-indicator")?.remove();
+              
+              if (data.file_url) {
+                  var fileLink;
+                  if (file.type.startsWith("image/")) {
+                      fileLink = "<img src='" + data.file_url + "' alt='Obrázok'>";
+                  } else if (file.type.startsWith("video/")) {
+                      fileLink = "<video controls><source src='" + data.file_url + "'></video>";
+                  } else if (file.type.startsWith("audio/")) {
+                      fileLink = "<audio controls><source src='" + data.file_url + "'></audio>";
+                  } else {
+                      fileLink = "<a href='" + data.file_url + "' target='_blank' download>📎 Download: " + file.name + "</a>";
+                  }
+                  socket.send(fileLink);
+              }
+          })
+          .catch(err => {
+              document.getElementById("upload-indicator")?.remove();
+              const errorMsg = document.createElement("div");
+              errorMsg.className = "message system";
+              errorMsg.innerText = "Chyba pri nahrávaní súboru.";
+              chat.appendChild(errorMsg);
+              setTimeout(() => errorMsg.remove(), 3000);
+          });
+    }
+
+    function toggleDarkMode() {
+      document.body.classList.toggle("dark-mode");
+      localStorage.setItem("darkMode", document.body.classList.contains("dark-mode"));
+    }
+
+    function toggleMobileMenu() {
+      document.querySelector('.mobile-menu').classList.toggle('active');
+    }
+
+    function logout() {
+      localStorage.removeItem("username");
+      localStorage.removeItem("is_admin");
+      window.location.href = "/";
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+      // Initialize dark mode
+      if (localStorage.getItem("darkMode") === "true") {
+        document.body.classList.add("dark-mode");
+      }
+
+      const chat = document.getElementById("chat");
+
+      // Load chat history
+      fetch("/history")
+        .then(response => response.json())
+        .then(messages => {
+          const currentUser = document.getElementById("username-span")?.textContent?.trim();
+          const isAdmin = localStorage.getItem("is_admin") === "True";
+
+          messages.forEach(msg => {
+            addMessageToChat(msg, currentUser, isAdmin);
+          });
+          chat.scrollTop = chat.scrollHeight;
+        });
+
+      // Enter key to send message
+      document.getElementById("message").addEventListener("keypress", function(event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          sendMessage();
+        }
+      });
+
+      // Message event listener
+      socket.on("message", function(data) {
+        const currentUser = document.getElementById("username-span")?.textContent?.trim();
+        const isAdmin = localStorage.getItem("is_admin") === "True";
+        
+        addMessageToChat(data, currentUser, isAdmin);
+        
+        // Notification if page is not in focus
+        if (Notification.permission !== "granted") {
+          Notification.requestPermission();
+        }
+
+        if (Notification.permission === "granted" && !document.hasFocus()) {
+          new Notification("1.C Chat", {
+            body: data.author + ": " + stripHtml(data.html)
+          });
+        }
+        
+    function linkifyMentions(text) {
+      return text.replace(/@(\w+)/g, '<span class="mention" onclick="insertMention(\'$1\')">@$1</span>');
+    }
+
+    function insertMention(username) {
+      const input = document.getElementById("messageInput");
+      input.value += `@${username} `;
+      input.focus();
+    }
+      });
+
+      // Delete message event
+      socket.on("delete_message", function(data) {
+        const msgEl = document.getElementById("msg-" + data.id);
+        if (msgEl) {
+          msgEl.classList.add("deleting");
+          setTimeout(() => msgEl.remove(), 300);
+        }
+      });
+
+      // Other socket events
+      socket.on("clear_chat", function() {
+        document.getElementById("chat").innerHTML = "";
+      });
+
+      socket.on("refresh_page", function() {
+        location.reload();
+      });
+
+      socket.on("force_ban_redirect", (data) => {
+        const reason = data.reason || "You was banned.";
+        window.location.href = "/ban?ban_reason=" + encodeURIComponent(reason);
+      });
+
+      // Update online counter
+      updateOnlineCount();
+      setInterval(updateOnlineCount, 10000);
+    });
+
+    // Update the history loading function to handle message formatting properly
+// Fix for addMessageToChat function in chatv4.html
+function addMessageToChat(data, currentUser, isAdmin) {
+  const chat = document.getElementById("chat");
+  
+  // Create message wrapper
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-wrapper";
+  wrapper.id = "msg-" + data.id;
+  
+  // Check if it's the current user's message
+  const isOwnMessage = data.author === currentUser;
+  if (isOwnMessage) {
+    wrapper.classList.add("own-message");
+  }
+  
+  // Create avatar with proper path handling
+  const avatar = document.createElement("img");
+  avatar.className = "avatar";
+  
+  // Handle profile picture path properly
+  if (data.profile_picture) {
+    // Ensure the path is correct and doesn't have double slashes
+    if (data.profile_picture.startsWith('/propic/')) {
+      avatar.src = data.profile_picture; // Keep as is if already has the correct path
+    } else if (data.profile_picture.startsWith('propic/')) {
+      avatar.src = '/' + data.profile_picture; // Add leading slash if missing
+    } else {
+      avatar.src = '/propic/' + data.profile_picture; // Add full path if just filename
+    }
+  } else {
+    avatar.src = "/propic/default.png"; // Default image
+  }
+  
+  avatar.onerror = function() {
+    // Fallback to default image if the profile picture fails to load
+    this.src = "/propic/default.png";
+  };
+  avatar.alt = "avatar";
+  
+  // Create message content container
+  const content = document.createElement("div");
+  content.className = "message-content";
+  
+  // Create message header with username
+  const header = document.createElement("div");
+  header.className = "message-header";
+  
+  // Add rank if available
+  if (data.rank) {
+    const rankSpan = document.createElement("span");
+    rankSpan.className = "rank";
+    rankSpan.innerHTML = data.rank;
+    header.appendChild(rankSpan);
+  }
+  
+  // Add username (with display_name if available)
+  const nameSpan = document.createElement("b");
+  nameSpan.innerHTML = data.display_name || data.author;
+  header.appendChild(nameSpan);
+  
+  // Add timestamp if available
+  if (data.timestamp) {
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "timestamp";
+    timeSpan.innerText = ` [${data.timestamp}]`;
+    header.appendChild(timeSpan);
+  }
+  
+  // Create message body
+  const body = document.createElement("div");
+  body.className = "message-body";
+  
+  // Handle different message formats
+  if (data.html) {
+    body.innerHTML = data.html;
+  } else if (data.message) {
+    // Legacy format - extract content from the message if it exists
+    body.innerHTML = data.message;
+  } else {
+    body.innerText = "Empty message";
+  }
+  
+  // Add delete button if user is author or admin
+  if (data.author === currentUser || isAdmin) {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "delete-btn";
+    deleteBtn.innerHTML = "🗑️";
+    deleteBtn.onclick = function() {
+      socket.emit("delete_message", { id: data.id });
+    };
+    body.appendChild(deleteBtn);
+  }
+  
+  // Assemble the message
+  content.appendChild(header);
+  content.appendChild(body);
+  wrapper.appendChild(avatar);
+  wrapper.appendChild(content);
+  
+  // Add the message to chat
+  chat.appendChild(wrapper);
+  
+  // Add flash effect for new messages
+  body.classList.add("flash");
+  
+  // Scroll to bottom
+  chat.scrollTop = chat.scrollHeight;
+}
+
+    function stripHtml(html) {
+      const tmp = document.createElement("DIV");
+      tmp.innerHTML = html;
+      return tmp.textContent || tmp.innerText || "";
+    }
+
+    function updateOnlineCount() {
+      fetch("/stats/online_count")
+        .then(res => res.json())
+        .then(data => {
+          let total = data.total - 1; // Exclude system user
+          document.getElementById("online-counter").innerHTML =
+            `<span>👥</span> ${data.online} / ${total}`;
+        });
+    }
+
+    // GIF Modal Functions
+    function openGIFModal() {
+      document.getElementById("gifModal").style.display = "block";
+      document.getElementById("gifSearchInput").focus();
+    }
+
+    function closeGIFModal() {
+      document.getElementById("gifModal").style.display = "none";
+    }
+
+    function searchGIFInModal() {
+      var query = document.getElementById("gifSearchInput").value;
+      if (!query) return;
+
+      var resultsContainer = document.getElementById("gifResults");
+      resultsContainer.innerHTML = "<p>Searching GIF...</p>";
+
+      fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key={{ api_key }}&limit=15`)
+        .then(response => response.json())
+        .then(data => {
+          resultsContainer.innerHTML = ""; // Clear loading message
+          if (data.results && data.results.length > 0) {
+            const gifGrid = document.createElement("div");
+            gifGrid.className = "gif-grid";
+            
+            data.results.forEach(result => {
+              var gifUrl = result.media_formats.gif.url;
+              
+              const gifItem = document.createElement("div");
+              gifItem.className = "gif-item";
+              gifItem.onclick = function() { sendGIF(gifUrl); };
+              
+              const gifImg = document.createElement("img");
+              gifImg.src = gifUrl;
+              gifImg.alt = "GIF";
+              
+              gifItem.appendChild(gifImg);
+              gifGrid.appendChild(gifItem);
+            });
+            
+            resultsContainer.appendChild(gifGrid);
+          } else {
+            resultsContainer.innerHTML = "<p>No GIFs found.</p>";
+          }
+        })
+        .catch(error => {
+          console.error("Chyba pri vyhľadávaní GIFu:", error);
+          resultsContainer.innerHTML = "<p>Error searching GIFs.</p>";
+        });
+    }
+
+    function sendGIF(gifUrl) {
+      socket.send(`<img src="${gifUrl}" alt="GIF">`);
+      closeGIFModal();
+    }
+
+    // Close modal when clicking outside of it
+    window.onclick = function(event) {
+      const modal = document.getElementById("gifModal");
+      if (event.target == modal) {
+        closeGIFModal();
+      }
+    }
+    
+    // Close modal with Escape key
+    document.addEventListener("keydown", function(event) {
+      if (event.key === "Escape") {
+        closeGIFModal();
+      }
+    });
+  </script>
+</head>
+<body>
+  <!-- Hidden span for username -->
+  <span id="username-span" style="display:none;">{{ session['username'] }}</span>
+  
+  <!-- GIF Search Modal -->
+  <div id="gifModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Search GIF</h3>
+        <button class="modal-close" onclick="closeGIFModal()">&times;</button>
+      </div>
+      <div class="modal-search">
+        <input type="text" id="gifSearchInput" placeholder="Enter key words">
+        <button onclick="searchGIFInModal()">Search</button>
+      </div>
+      <div id="gifResults"></div>
+    </div>
+  </div>
+  
+  <!-- Mobile menu 
+  <div class="mobile-menu-toggle" onclick="toggleMobileMenu()">+</div>
+  <div class="mobile-menu">
+    <div class="mobile-menu-item" onclick="toggleDarkMode()">🌙</div>
+    <div class="mobile-menu-item" onclick="openGIFModal()">🎞️</div>
+    <div class="mobile-menu-item" onclick="document.getElementById('fileInput').click()">📁</div>
+  </div>-->
+
+  <div class="chat-container">
+    <div class="user-info-box" id="user-info-box">
+      <div class="user-info-left">
+        <div class="logo-container">
+          <img src="static/logo.png" alt="IntraChat Logo" class="logo">
+        </div>
+        <div class="user-details">
+          <span>{{ session['rank']|safe }} {{ session['display_name']|safe }}</span>
+          <span style="font-size:12px;">(@{{ session['username'] }})</span>
+          
+        </div>
+        <div id="online-counter">👥 ...</div>
+        <div>
+        {% if session['is_admin'] == "1" %}
+        <span class="admin-badge">🛡️ Admin</span>
+        {% endif %}
+        </div>
+      </div>
+      <div class="user-info-right">
+        <button class="btn" onclick="window.location.href='/user/{{ session['id'] }}'">My profile</button>
+        <button class="btn btn-icon" onclick="toggleDarkMode()">🌙</button>
+        <button class="btn btn-primary" onclick="logout()">Log out</button>
+      </div>
+    </div>
+
+    <div id="chat"></div>
+
+    <div class="input-container">
+      <div class="input-wrapper">
+        <input type="text" id="message" placeholder="Send message...">
+      </div>
+      <div class="input-actions">
+        <button class="action-btn" onclick="openGIFModal()">🎞️</button>
+        <input type="file" id="fileInput" onchange="uploadFile()">
+        <button class="action-btn" onclick="document.getElementById('fileInput').click()">📁</button>
+        <button class="send-btn" onclick="sendMessage()">➤</button>
+      </div>
+    </div>
+  </div>

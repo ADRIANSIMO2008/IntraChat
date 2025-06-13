@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Profile</title>
+  <style>
+    :root {
+      --primary: #4361ee;
+      --primary-hover: #3a56d4;
+      --danger: #ef476f;
+      --success: #06d6a0;
+      --text: #2b2d42;
+      --text-light: #8d99ae;
+      --background: #f8f9fa;
+      --card: #ffffff;
+      --border: #e9ecef;
+    }
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--background);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 20px;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    .container {
+      max-width: 800px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    
+    .profile-box {
+      background: var(--card);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+      overflow: hidden;
+      margin-bottom: 20px;
+    }
+    
+    .profile-header {
+      background: linear-gradient(135deg, var(--primary), #7209b7);
+      color: white;
+      padding: 30px 20px;
+      text-align: center;
+      position: relative;
+    }
+    
+    .profile-avatar {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      border: 5px solid white;
+      margin: 0 auto 15px;
+      display: block;
+      object-fit: cover;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    }
+    
+    .profile-name {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 5px;
+    }
+    
+    .profile-username {
+      font-size: 16px;
+      opacity: 0.9;
+      margin-bottom: 10px;
+    }
+    
+    .profile-rank {
+      display: inline-block;
+      background: rgba(255,255,255,0.2);
+      padding: 5px 15px;
+      border-radius: 50px;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    
+    .admin-badge {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(255,255,255,0.2);
+      color: white;
+      padding: 5px 12px;
+      border-radius: 50px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .banned-badge {
+      background: var(--danger);
+      color: white;
+      padding: 8px 16px;
+      text-align: center;
+      margin-bottom: 20px;
+      font-weight: 500;
+      border-radius: 4px;
+    }
+    
+    .ban-reason {
+      background: rgba(239, 71, 111, 0.1);
+      color: var(--danger);
+      padding: 15px;
+      margin-bottom: 20px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    
+    .profile-content {
+      padding: 25px;
+    }
+    
+    .section-title {
+      font-size: 18px;
+      margin-bottom: 20px;
+      color: var(--text);
+      position: relative;
+      padding-bottom: 10px;
+    }
+    
+    .section-title:after {
+      content: '';
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      width: 50px;
+      height: 3px;
+      background: var(--primary);
+      border-radius: 3px;
+    }
+    
+    .form-group {
+      margin-bottom: 20px;
+    }
+    
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    
+    .input-field {
+      width: 100%;
+      padding: 12px 15px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 15px;
+      transition: all 0.3s;
+    }
+    
+    .input-field:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.1);
+    }
+    
+    .file-input-wrapper {
+      position: relative;
+      overflow: hidden;
+      display: inline-block;
+      cursor: pointer;
+    }
+    
+    .file-input-label {
+      display: inline-block;
+      padding: 10px 15px;
+      background: var(--background);
+      color: var(--text);
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .file-input-label:hover {
+      background: #f1f3f5;
+    }
+    
+    input[type="file"] {
+      font-size: 100px;
+      position: absolute;
+      left: 0;
+      top: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+    
+    .btn:hover {
+      background: var(--primary-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 5px 15px rgba(67, 97, 238, 0.3);
+    }
+    
+    .btn-secondary {
+      background: var(--background);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    
+    .btn-secondary:hover {
+      background: #f1f3f5;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+    }
+    
+    .btn-danger {
+      background: var(--danger);
+    }
+    
+    .btn-danger:hover {
+      background: #e5405e;
+      box-shadow: 0 5px 15px rgba(239, 71, 111, 0.3);
+    }
+    
+    .btn-block {
+      display: block;
+      width: 100%;
+    }
+    
+    .action-btns {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 500;
+      transition: all 0.3s;
+      margin-top: 20px;
+    }
+    
+    .back-link:hover {
+      color: var(--primary-hover);
+    }
+    
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 20px;
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      font-weight: 500;
+      color: var(--text-light);
+      transition: all 0.3s;
+    }
+    
+    .tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    @media (max-width: 600px) {
+      .profile-header {
+        padding: 20px 15px;
+      }
+      
+      .profile-avatar {
+        width: 100px;
+        height: 100px;
+      }
+      
+      .profile-content {
+        padding: 15px;
+      }
+      
+      .action-btns {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="profile-box">
+      <div class="profile-header">
+        <img src="{{ user.profile_picture }}" alt="Profile picture" class="profile-avatar">
+        <h1 class="profile-name">{{ user.display_name|safe }}</h1>
+        <div class="profile-username">@{{ user.username }}</div>
+        <div class="profile-rank">{{ user.rank|safe }}</div>
+        {% if user.is_admin == "1" %}
+        <div class="admin-badge">Admin</div>
+        {% endif %}
+      </div>
+
+      <div class="profile-content">
+        {% if user.is_banned == 'Yes' %}
+        <div class="banned-badge">
+          <i class="fas fa-ban"></i> This user is banned
+        </div>
+        <div class="ban-reason">
+          <strong>Reason:</strong> {{ user.ban_reason or 'Not specified' }}
+        </div>
+        {% endif %}
+
+        {% if session['id'] == user.id %}
+        <div class="tabs">
+          <div class="tab active" onclick="openTab(event, 'profile-info')">Profile</div>
+          <div class="tab" onclick="openTab(event, 'password')">Password Change</div>
+          <div class="tab" onclick="openTab(event, 'avatar')">Profile Picture</div>
+        </div>
+
+        <div id="profile-info" class="tab-content active">
+          <h3 class="section-title">Profile Information</h3>
+          <form method="POST">
+            <div class="form-group">
+              <label for="display_name">Display Name</label>
+              <input type="text" class="input-field" id="display_name" name="display_name" value="{{ user.display_name }}">
+            </div>
+            <button type="submit" class="btn">Save Changes</button>
+          </form>
+        </div>
+
+        <div id="password" class="tab-content">
+          <h3 class="section-title">Change Password</h3>
+          <form method="POST" action="/change_password">
+            <div class="form-group">
+              <label for="old_password">Current Password</label>
+              <input type="password" class="input-field" id="old_password" name="old_password" required>
+            </div>
+            <div class="form-group">
+              <label for="new_password">New Password</label>
+              <input type="password" class="input-field" id="new_password" name="new_password" required>
+            </div>
+            <button type="submit" class="btn">Change Password</button>
+          </form>
+        </div>
+
+        <div id="avatar" class="tab-content">
+          <h3 class="section-title">Change Profile Picture</h3>
+          <form method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+              <div class="file-input-wrapper">
+                <label class="file-input-label" for="profile_pic">Choose File</label>
+                <input type="file" id="profile_pic" name="profile_pic" accept="image/*">
+              </div>
+              <p style="margin-top: 10px; font-size: 14px; color: var(--text-light);">Supported formats: JPG, PNG, GIF</p>
+            </div>
+            <button type="submit" class="btn">Upload Picture</button>
+          </form>
+        </div>
+
+        {% else %}
+        <h3 class="section-title">Profile Information</h3>
+        <p><strong>Display Name:</strong> {{ user.display_name|safe }}</p>
+        {% endif %}
+
+        <a href="/chat" class="back-link">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+          Back to Chat
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function openTab(evt, tabName) {
+      // Hide all tab content
+      var tabcontent = document.getElementsByClassName("tab-content");
+      for (var i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].classList.remove("active");
+      }
+
+      // Remove active class from all tabs
+      var tabs = document.getElementsByClassName("tab");
+      for (var i = 0; i < tabs.length; i++) {
+        tabs[i].classList.remove("active");
+      }
+
+      // Show the current tab and add active class
+      document.getElementById(tabName).classList.add("active");
+      evt.currentTarget.classList.add("active");
+    }
+  </script>
+</body>
+</html>

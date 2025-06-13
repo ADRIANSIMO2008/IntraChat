@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Správa používateľov</title>
+    <style>
+        :root {
+            --primary: #3498db;
+            --primary-dark: #2980b9;
+            --success: #2ecc71;
+            --danger: #e74c3c;
+            --warning: #f39c12;
+            --dark: #34495e;
+            --light: #f8f9fa;
+            --border: #dfe6e9;
+            --text: #2d3436;
+            --muted: #636e72;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--light);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+        }
+        
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        h1 {
+            font-size: 24px;
+            color: var(--dark);
+        }
+        
+        .search-container {
+            position: relative;
+            max-width: 300px;
+        }
+        
+        .search-container input {
+            width: 100%;
+            padding: 10px 15px 10px 35px;
+            border-radius: 20px;
+            border: 1px solid var(--border);
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .search-container input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
+        .search-container:before {
+            content: "🔍";
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--muted);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            table-layout: fixed;
+        }
+        
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        th {
+            background: var(--dark);
+            color: white;
+            font-weight: 500;
+            position: sticky;
+            top: 0;
+        }
+        
+        tr:hover {
+            background-color: rgba(52, 152, 219, 0.05);
+        }
+        
+        .table-responsive {
+            overflow-x: auto;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            text-align: center;
+        }
+        
+        .badge-admin {
+            background: rgba(52, 152, 219, 0.2);
+            color: var(--primary-dark);
+        }
+        
+        .badge-banned {
+            background: rgba(231, 76, 60, 0.2);
+            color: var(--danger);
+        }
+        
+        .badge-normal {
+            background: rgba(46, 204, 113, 0.2);
+            color: var(--success);
+        }
+        
+        .form-inline {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .form-inline input[type="text"],
+        .form-inline input[type="number"] {
+            padding: 6px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .form-inline input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+        
+        button {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        
+        button:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .btn-save {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-ban {
+            background: var(--danger);
+            color: white;
+        }
+        
+        .btn-unban {
+            background: var(--success);
+            color: white;
+        }
+        
+        .btn-tempban {
+            background: var(--warning);
+            color: white;
+        }
+        
+        .action-cell {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 5px;
+            margin-top: 20px;
+        }
+        
+        .pagination button {
+            min-width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        
+        .pagination button.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+        
+        /* Responzívny dizajn */
+        @media (max-width: 992px) {
+            .container {
+                padding: 10px;
+            }
+            
+            th, td {
+                padding: 10px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            
+            .search-container {
+                width: 100%;
+                max-width: none;
+            }
+            
+            .form-inline {
+                flex-direction: column;
+            }
+        }
+        
+        /* Modal na potvrdenie akcie */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .modal-close {
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--muted);
+        }
+        
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        /* Tooltip pre dlhé texty */
+        .tooltip {
+            position: relative;
+            display: inline-block;
+            cursor: help;
+        }
+        
+        .tooltip .tooltip-text {
+            visibility: hidden;
+            width: 200px;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            text-align: center;
+            border-radius: 4px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .tooltip:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>User management</h1>
+            <div class="search-container">
+                <input type="text" id="searchInput" placeholder="Vyhľadať používateľa..." onkeyup="searchUsers()">
+            </div>
+        </header>
+        
+        <div class="table-responsive">
+            <table id="usersTable">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">ID</th>
+                        <th>Username</th>
+                        <th>Displayname</th>
+                        <th style="width: 100px;">Rank</th>
+                        <th style="width: 80px;">Admin</th>
+                        <th style="width: 80px;">Status</th>
+                        <th>Reason</th>
+                        <th style="width: 200px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td>{{ user.id }}</td>
+                        <td>{{ user.username }}</td>
+                        <td>{{ user.display_name }}</td>
+                        <td>
+                            <form method="post" action="/update_rank" class="form-inline">
+                                <input type="hidden" name="user_id" value="{{ user.id }}">
+                                <input type="text" name="new_rank" value="{{ user.rank }}" style="width: 60px;">
+                                <button type="submit" class="btn-save">✓</button>
+                            </form>
+                        </td>
+                        <td>
+                            <span class="badge {% if user.is_admin %}badge-admin{% else %}badge-normal{% endif %}">
+                                {{ 'Yes' if user.is_admin == "1" else 'No' }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge {% if user.is_banned == 'Yes' %}badge-banned{% else %}badge-normal{% endif %}">
+                                {{ 'Banned' if user.is_banned == 'Yes' else 'Active' }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if user.ban_reason %}
+                            <div class="tooltip">
+                                {{ user.ban_reason[:20] + '...' if user.ban_reason|length > 20 else user.ban_reason }}
+                                <span class="tooltip-text">{{ user.ban_reason }}</span>
+                            </div>
+                            {% else %}
+                            –
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="action-cell">
+                                {% if user.is_banned == 'No' %}
+                                <button class="btn-ban" onclick="showBanModal('{{ user.id }}', '{{ user.username }}')">Ban</button>
+                                {% else %}
+                                <form method="post" action="/unban_user">
+                                    <input type="hidden" name="user_id" value="{{ user.id }}">
+                                    <button type="submit" class="btn-unban">Unban</button>
+                                </form>
+                                {% endif %}
+                                <button class="btn-tempban" onclick="showTempBanModal('{{ user.id }}', '{{ user.username }}')">Temp</button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="pagination">
+            <button>&laquo;</button>
+            <button class="active">1</button>
+            <button>&raquo;</button>
+        </div>
+    </div>
+    
+    <!-- Modal na ban používateľa -->
+    <div id="banModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Ban user</h3>
+                <span class="modal-close" onclick="closeModal('banModal')">&times;</span>
+            </div>
+            <p>Are you sure you want to pernamently ban user <strong id="banUsername"></strong>?</p>
+            <form method="post" action="/ban_user">
+                <input type="hidden" id="banUserId" name="user_id">
+                <div style="margin-top: 15px;">
+                    <label for="banReason">Reason:</label>
+                    <input type="text" id="banReason" name="reason" placeholder="Enter ban reason" required style="width: 100%; padding: 8px; margin-top: 5px;">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('banModal')" style="background: #dfe6e9; color: #636e72;">Cancel</button>
+                    <button type="submit" class="btn-ban">Confirm</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Modal na temp ban používateľa -->
+    <div id="tempBanModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Temp ban user</h3>
+                <span class="modal-close" onclick="closeModal('tempBanModal')">&times;</span>
+            </div>
+            <p>Temp ban user <strong id="tempBanUsername"></strong></p>
+            <form method="post" action="/tempban">
+                <input type="hidden" id="tempBanUserId" name="user_id">
+                <div style="margin-top: 15px;">
+                    <label for="tempBanMinutes">Ban length (minutes):</label>
+                    <input type="number" id="tempBanMinutes" name="minutes" placeholder="Minutes" required style="width: 100%; padding: 8px; margin-top: 5px;">
+                </div>
+                <div style="margin-top: 15px;">
+                    <label for="tempBanReason">Reason:</label>
+                    <input type="text" id="tempBanReason" name="reason" placeholder="Enter ban reason" required style="width: 100%; padding: 8px; margin-top: 5px;">
+                </div>
+                <div class="modal-actions">
+                    <button type="button" onclick="closeModal('tempBanModal')" style="background: #dfe6e9; color: #636e72;">Cancel</button>
+                    <button type="submit" class="btn-tempban">Confirm</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        // Funkcia na vyhľadávanie používateľov
+        function searchUsers() {
+            const input = document.getElementById('searchInput');
+            const filter = input.value.toUpperCase();
+            const table = document.getElementById('usersTable');
+            const tr = table.getElementsByTagName('tr');
+            
+            for (let i = 1; i < tr.length; i++) { // Začnite od 1, aby ste preskočili hlavičku
+                const username = tr[i].getElementsByTagName('td')[1]; // Stĺpec s používateľským menom
+                const displayName = tr[i].getElementsByTagName('td')[2]; // Stĺpec so zobrazovaným menom
+                
+                if (username || displayName) {
+                    const usernameValue = username.textContent || username.innerText;
+                    const displayNameValue = displayName.textContent || displayName.innerText;
+                    
+                    if (usernameValue.toUpperCase().indexOf(filter) > -1 || 
+                        displayNameValue.toUpperCase().indexOf(filter) > -1) {
+                        tr[i].style.display = '';
+                    } else {
+                        tr[i].style.display = 'none';
+                    }
+                }
+            }
+        }
+        
+        // Funkcie pre modálne okná
+        function showBanModal(userId, username) {
+            const modal = document.getElementById('banModal');
+            document.getElementById('banUserId').value = userId;
+            document.getElementById('banUsername').textContent = username;
+            modal.style.display = 'flex';
+        }
+        
+        function showTempBanModal(userId, username) {
+            const modal = document.getElementById('tempBanModal');
+            document.getElementById('tempBanUserId').value = userId;
+            document.getElementById('tempBanUsername').textContent = username;
+            modal.style.display = 'flex';
+        }
+        
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+        
+        // Zatvoriť modálne okno kliknutím mimo obsahu
+        window.onclick = function(event) {
+            const banModal = document.getElementById('banModal');
+            const tempBanModal = document.getElementById('tempBanModal');
+            
+            if (event.target === banModal) {
+                banModal.style.display = 'none';
+            }
+            
+            if (event.target === tempBanModal) {
+                tempBanModal.style.display = 'none';
+            }
+        };
+    </script>
+</body>
+</html>

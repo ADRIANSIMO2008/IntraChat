@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prístup zamietnutý</title>
+    <style>
+        :root {
+            --main-bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --primary: #dc3545;
+            --primary-dark: #bd2130;
+            --text: #212529;
+            --text-light: #6c757d;
+            --border: #dee2e6;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: var(--main-bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .ban-container {
+            background-color: var(--card-bg);
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 550px;
+            padding: 30px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .ban-header {
+            margin-bottom: 25px;
+            position: relative;
+        }
+        
+        .ban-icon {
+            font-size: 52px;
+            color: var(--primary);
+            margin-bottom: 15px;
+        }
+        
+        .ban-title {
+            color: var(--primary);
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        
+        .ban-languages {
+            font-size: 14px;
+            color: var(--text-light);
+            margin-bottom: 20px;
+        }
+        
+        .ban-info {
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+            margin-bottom: 25px;
+        }
+        
+        .ban-reason {
+            background-color: rgba(220, 53, 69, 0.1);
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        
+        .ban-time {
+            margin-bottom: 15px;
+        }
+        
+        .ban-time p {
+            margin-bottom: 8px;
+        }
+        
+        .countdown {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+            background-color: rgba(220, 53, 69, 0.05);
+            padding: 10px 20px;
+            border-radius: 6px;
+            display: inline-block;
+            min-width: 150px;
+        }
+        
+        .ban-footer {
+            font-size: 14px;
+            color: var(--text-light);
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 480px) {
+            .ban-container {
+                padding: 20px;
+            }
+            
+            .ban-title {
+                font-size: 24px;
+            }
+        }
+        
+        .progress-container {
+            width: 100%;
+            background-color: #e9ecef;
+            border-radius: 4px;
+            height: 8px;
+            margin-top: 15px;
+            overflow: hidden;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background-color: var(--primary);
+            transition: width 1s linear;
+        }
+    </style>
+</head>
+<body>
+    <div class="ban-container">
+        <div class="ban-header">
+            <div class="ban-icon">⛔</div>
+            <h1 class="ban-title">Access denied</h1>
+            <div class="ban-languages">BANNED / ЗАБЛОКИРОВАНО</div>
+        </div>
+        
+        <div class="ban-info">
+            <div class="ban-reason" id="banReason">
+                Reason: {{ ban_reason }}
+            </div>
+            
+            <div class="ban-time" id="banTimeSection">
+                <p>Ban until: <strong id="banUntil">{{ ban_until }}</strong></p>
+                <p>Remaining time:</p>
+                <div class="countdown" id="countdown">Loading...</div>
+                <div class="progress-container">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="ban-footer">
+            This account has been banned due to violation of server rules. If you believe this is a mistake, please contact the server administrator.
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Function to get URL parameters
+            function getUrlParameter(name) {
+                name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+                const regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+                const results = regex.exec(location.search);
+                return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+            }
+            
+            // Get ban reason from URL parameter
+            const urlBanReason = getUrlParameter('ban_reason');
+            const banReasonElement = document.getElementById('banReason');
+            
+            // Update ban reason text if it exists in URL
+            if (urlBanReason && urlBanReason.trim() !== '') {
+                banReasonElement.textContent = `Dôvod: ${urlBanReason}`;
+            } else if (banReasonElement.textContent.trim() === "Dôvod: {{ ban_reason }}") {
+                banReasonElement.textContent = "Dôvod: Porušenie pravidiel servera";
+            }
+            
+            // Get ban until date from URL parameter or template
+            const urlBanUntil = getUrlParameter('ban_until');
+            const banUntilElement = document.getElementById('banUntil');
+            const countdownElement = document.getElementById('countdown');
+            const progressBar = document.getElementById('progressBar');
+            const banTimeSection = document.getElementById('banTimeSection');
+            
+            // Format date in the needed format
+            let banUntilDateTime;
+            if (urlBanUntil && urlBanUntil.trim() !== '') {
+                // Use URL parameter if available
+                banUntilElement.textContent = urlBanUntil;
+                banUntilDateTime = urlBanUntil;
+            } else if (banUntilElement.textContent.trim() !== "{{ ban_until }}") {
+                // Use template value if it's been replaced with a real date
+                banUntilDateTime = banUntilElement.textContent.trim();
+            } else {
+                // No valid date found
+                banTimeSection.style.display = 'none';
+                return;
+            }
+            
+            // Try to parse the date (handle different formats)
+            let until;
+            if (banUntilDateTime.includes('T')) {
+                // ISO format
+                until = new Date(banUntilDateTime + (banUntilDateTime.endsWith('Z') ? '' : 'Z')).getTime();
+            } else {
+                // Try to parse other formats
+                until = new Date(banUntilDateTime).getTime();
+                
+                // If parsing failed (NaN), try additional formats
+                if (isNaN(until)) {
+                    // Try European format (DD.MM.YYYY HH:MM)
+                    const parts = banUntilDateTime.match(/(\d+)[.\-\/](\d+)[.\-\/](\d+)(?:\s+(\d+):(\d+))?/);
+                    if (parts) {
+                        const [_, day, month, year, hours = '0', minutes = '0'] = parts;
+                        until = new Date(year, month - 1, day, hours, minutes).getTime();
+                    }
+                }
+            }
+            
+            // If we successfully parsed a date
+            if (!isNaN(until)) {
+                // Calculate total ban duration (for progress bar)
+                const now = new Date().getTime();
+                
+                // Get ban start time (estimate based on typical ban durations)
+                // Assuming ban started 24 hours ago if no other information
+                const banStart = now - 24 * 60 * 60 * 1000;
+                const totalBanDuration = until - banStart;
+                
+                // Update countdown
+                const updateCountdown = () => {
+                    const currentTime = new Date().getTime();
+                    const remainingTime = until - currentTime;
+                    
+                    if (remainingTime <= 0) {
+                        countdownElement.innerText = "Ban vypršal";
+                        progressBar.style.width = '100%';
+                        
+                        // Reload page after a short delay
+                        setTimeout(() => {
+                            location.reload();
+                        }, 1500);
+                        
+                        return;
+                    }
+                    
+                    // Calculate time components
+                    const days = Math.floor(remainingTime / (1000 * 60 * 60 * 24));
+                    const hours = Math.floor((remainingTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                    const minutes = Math.floor((remainingTime % (1000 * 60 * 60)) / (1000 * 60));
+                    const seconds = Math.floor((remainingTime % (1000 * 60)) / 1000);
+                    
+                    // Display countdown in appropriate format
+                    if (days > 0) {
+                        countdownElement.innerText = `${days}d ${hours}h ${minutes}m`;
+                    } else if (hours > 0) {
+                        countdownElement.innerText = `${hours}h ${minutes}m ${seconds}s`;
+                    } else {
+                        countdownElement.innerText = `${minutes}m ${seconds}s`;
+                    }
+                    
+                    // Update progress bar
+                    const elapsed = currentTime - banStart;
+                    const progress = Math.min((elapsed / totalBanDuration) * 100, 100);
+                    progressBar.style.width = `${progress}%`;
+                };
+                
+                // Initial update
+                updateCountdown();
+                
+                // Update countdown every second
+                setInterval(updateCountdown, 1000);
+            } else {
+                // Invalid date format, hide time section
+                banTimeSection.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>
