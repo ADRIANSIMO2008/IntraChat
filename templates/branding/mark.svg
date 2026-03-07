@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">{{ app_name }}</title>
+  <desc id="desc">Monogram logo for {{ app_name }}</desc>
+  <defs>
+    <linearGradient id="markGradient" x1="12" y1="10" x2="82" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1CA1D8" />
+      <stop offset="0.58" stop-color="#146C94" />
+      <stop offset="1" stop-color="#0F4E6C" />
+    </linearGradient>
+    <linearGradient id="glowGradient" x1="20" y1="20" x2="76" y2="76" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.36" />
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+    <filter id="markShadow" x="0" y="0" width="96" height="96" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="8" flood-color="#08151F" flood-opacity="0.24" />
+    </filter>
+  </defs>
+
+  <g filter="url(#markShadow)">
+    <rect x="10" y="8" width="76" height="76" rx="24" fill="url(#markGradient)" />
+    <rect x="18" y="16" width="60" height="60" rx="20" fill="url(#glowGradient)" />
+    <path d="M27 30.5C27 26.9101 29.9101 24 33.5 24H62.5C66.0899 24 69 26.9101 69 30.5V47.5C69 51.0899 66.0899 54 62.5 54H48.3721L37.0959 62.6035C35.4469 63.8617 33 62.6862 33 60.6113V54H33.5C29.9101 54 27 51.0899 27 47.5V30.5Z" fill="#F7FBFD" fill-opacity="0.13" />
+    <path d="M58.75 20L69 30.25" stroke="#F5B24A" stroke-width="4.5" stroke-linecap="round" />
+    <circle cx="68" cy="68" r="6" fill="#F5B24A" />
+    <text x="48" y="58" text-anchor="middle" fill="#F7FBFD" font-family="'Segoe UI', Arial, sans-serif" font-size="26" font-weight="800" letter-spacing="1.5">{{ app_initials }}</text>
+  </g>
+</svg>

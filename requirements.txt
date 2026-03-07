@@ -1,7 +1,9 @@
+eventlet
 flask
+flask-login
 flask-socketio
-sqlalchemy
-werkzeug
+flask-sqlalchemy
 psutil
 requests
-eventlet
+sqlalchemy
+werkzeug

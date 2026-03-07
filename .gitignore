@@ -1,3 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Flask
 instance/
 *.db
-*.json
+.flask_session
+
+# Uploaded files
+uploads/
+
+# Profile pictures (optional - you may want to keep default.png)
+propic/*.png
+!propic/default.png
+!propic/user_2.png
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

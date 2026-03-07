@@ -1,444 +1,528 @@
 <!DOCTYPE html>
-<html lang="sk">
+<html lang="{{ ui_language }}">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IntraChat</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/x-icon" href="static/favicon.ico" />
-  <link rel="stylesheet" href="static/style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
-  <script>
-    localStorage.setItem("username", "{{ username }}");
-    localStorage.setItem("is_admin", "{{ 'True' if session['is_admin'] else 'False' }}");
-
-    const socket = io();
-
-    function sendMessage() {
-      let message = document.getElementById("message").value.trim();
-      if (message !== "") {
-        // Handle GIF links
-        const gifPattern = /(https?:\/\/[^\s]+\.gif)/gi;
-        if (gifPattern.test(message)) {
-          message = message.replace(gifPattern, function(match) {
-            return `<img src="${match}" alt="GIF">`;
-          });
-        }
-
-        socket.emit("message", message);
-        document.getElementById("message").value = "";
-      }
-    }
-
-    function uploadFile() {
-      var fileInput = document.getElementById("fileInput");
-      var file = fileInput.files[0];
-      if (!file) return;
-      
-      // Show upload indicator
-      const chat = document.getElementById("chat");
-      const uploadIndicator = document.createElement("div");
-      uploadIndicator.className = "message system";
-      uploadIndicator.id = "upload-indicator";
-      uploadIndicator.innerText = "Nahrávam súbor...";
-      chat.appendChild(uploadIndicator);
-      chat.scrollTop = chat.scrollHeight;
-      
-      var formData = new FormData();
-      formData.append("file", file);
-      
-      fetch("/upload", { method: "POST", body: formData })
-          .then(response => response.json())
-          .then(data => {
-              // Remove upload indicator
-              document.getElementById("upload-indicator")?.remove();
-              
-              if (data.file_url) {
-                  var fileLink;
-                  if (file.type.startsWith("image/")) {
-                      fileLink = "<img src='" + data.file_url + "' alt='Obrázok'>";
-                  } else if (file.type.startsWith("video/")) {
-                      fileLink = "<video controls><source src='" + data.file_url + "'></video>";
-                  } else if (file.type.startsWith("audio/")) {
-                      fileLink = "<audio controls><source src='" + data.file_url + "'></audio>";
-                  } else {
-                      fileLink = "<a href='" + data.file_url + "' target='_blank' download>📎 Download: " + file.name + "</a>";
-                  }
-                  socket.send(fileLink);
-              }
-          })
-          .catch(err => {
-              document.getElementById("upload-indicator")?.remove();
-              const errorMsg = document.createElement("div");
-              errorMsg.className = "message system";
-              errorMsg.innerText = "Chyba pri nahrávaní súboru.";
-              chat.appendChild(errorMsg);
-              setTimeout(() => errorMsg.remove(), 3000);
-          });
-    }
-
-    function toggleDarkMode() {
-      document.body.classList.toggle("dark-mode");
-      localStorage.setItem("darkMode", document.body.classList.contains("dark-mode"));
-    }
-
-    function toggleMobileMenu() {
-      document.querySelector('.mobile-menu').classList.toggle('active');
-    }
-
-    function logout() {
-      localStorage.removeItem("username");
-      localStorage.removeItem("is_admin");
-      window.location.href = "/";
-    }
-
-    document.addEventListener("DOMContentLoaded", function() {
-      // Initialize dark mode
-      if (localStorage.getItem("darkMode") === "true") {
-        document.body.classList.add("dark-mode");
-      }
-
-      const chat = document.getElementById("chat");
-
-      // Load chat history
-      fetch("/history")
-        .then(response => response.json())
-        .then(messages => {
-          const currentUser = document.getElementById("username-span")?.textContent?.trim();
-          const isAdmin = localStorage.getItem("is_admin") === "True";
-
-          messages.forEach(msg => {
-            addMessageToChat(msg, currentUser, isAdmin);
-          });
-          chat.scrollTop = chat.scrollHeight;
-        });
-
-      // Enter key to send message
-      document.getElementById("message").addEventListener("keypress", function(event) {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          sendMessage();
-        }
-      });
-
-      // Message event listener
-      socket.on("message", function(data) {
-        const currentUser = document.getElementById("username-span")?.textContent?.trim();
-        const isAdmin = localStorage.getItem("is_admin") === "True";
-        
-        addMessageToChat(data, currentUser, isAdmin);
-        
-        // Notification if page is not in focus
-        if (Notification.permission !== "granted") {
-          Notification.requestPermission();
-        }
-
-        if (Notification.permission === "granted" && !document.hasFocus()) {
-          new Notification("1.C Chat", {
-            body: data.author + ": " + stripHtml(data.html)
-          });
-        }
-        
-    function linkifyMentions(text) {
-      return text.replace(/@(\w+)/g, '<span class="mention" onclick="insertMention(\'$1\')">@$1</span>');
-    }
-
-    function insertMention(username) {
-      const input = document.getElementById("messageInput");
-      input.value += `@${username} `;
-      input.focus();
-    }
-      });
-
-      // Delete message event
-      socket.on("delete_message", function(data) {
-        const msgEl = document.getElementById("msg-" + data.id);
-        if (msgEl) {
-          msgEl.classList.add("deleting");
-          setTimeout(() => msgEl.remove(), 300);
-        }
-      });
-
-      // Other socket events
-      socket.on("clear_chat", function() {
-        document.getElementById("chat").innerHTML = "";
-      });
-
-      socket.on("refresh_page", function() {
-        location.reload();
-      });
-
-      socket.on("force_ban_redirect", (data) => {
-        const reason = data.reason || "You was banned.";
-        window.location.href = "/ban?ban_reason=" + encodeURIComponent(reason);
-      });
-
-      // Update online counter
-      updateOnlineCount();
-      setInterval(updateOnlineCount, 10000);
-    });
-
-    // Update the history loading function to handle message formatting properly
-// Fix for addMessageToChat function in chatv4.html
-function addMessageToChat(data, currentUser, isAdmin) {
-  const chat = document.getElementById("chat");
-  
-  // Create message wrapper
-  const wrapper = document.createElement("div");
-  wrapper.className = "message-wrapper";
-  wrapper.id = "msg-" + data.id;
-  
-  // Check if it's the current user's message
-  const isOwnMessage = data.author === currentUser;
-  if (isOwnMessage) {
-    wrapper.classList.add("own-message");
-  }
-  
-  // Create avatar with proper path handling
-  const avatar = document.createElement("img");
-  avatar.className = "avatar";
-  
-  // Handle profile picture path properly
-  if (data.profile_picture) {
-    // Ensure the path is correct and doesn't have double slashes
-    if (data.profile_picture.startsWith('/propic/')) {
-      avatar.src = data.profile_picture; // Keep as is if already has the correct path
-    } else if (data.profile_picture.startsWith('propic/')) {
-      avatar.src = '/' + data.profile_picture; // Add leading slash if missing
-    } else {
-      avatar.src = '/propic/' + data.profile_picture; // Add full path if just filename
-    }
-  } else {
-    avatar.src = "/propic/default.png"; // Default image
-  }
-  
-  avatar.onerror = function() {
-    // Fallback to default image if the profile picture fails to load
-    this.src = "/propic/default.png";
-  };
-  avatar.alt = "avatar";
-  
-  // Create message content container
-  const content = document.createElement("div");
-  content.className = "message-content";
-  
-  // Create message header with username
-  const header = document.createElement("div");
-  header.className = "message-header";
-  
-  // Add rank if available
-  if (data.rank) {
-    const rankSpan = document.createElement("span");
-    rankSpan.className = "rank";
-    rankSpan.innerHTML = data.rank;
-    header.appendChild(rankSpan);
-  }
-  
-  // Add username (with display_name if available)
-  const nameSpan = document.createElement("b");
-  nameSpan.innerHTML = data.display_name || data.author;
-  header.appendChild(nameSpan);
-  
-  // Add timestamp if available
-  if (data.timestamp) {
-    const timeSpan = document.createElement("span");
-    timeSpan.className = "timestamp";
-    timeSpan.innerText = ` [${data.timestamp}]`;
-    header.appendChild(timeSpan);
-  }
-  
-  // Create message body
-  const body = document.createElement("div");
-  body.className = "message-body";
-  
-  // Handle different message formats
-  if (data.html) {
-    body.innerHTML = data.html;
-  } else if (data.message) {
-    // Legacy format - extract content from the message if it exists
-    body.innerHTML = data.message;
-  } else {
-    body.innerText = "Empty message";
-  }
-  
-  // Add delete button if user is author or admin
-  if (data.author === currentUser || isAdmin) {
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "delete-btn";
-    deleteBtn.innerHTML = "🗑️";
-    deleteBtn.onclick = function() {
-      socket.emit("delete_message", { id: data.id });
-    };
-    body.appendChild(deleteBtn);
-  }
-  
-  // Assemble the message
-  content.appendChild(header);
-  content.appendChild(body);
-  wrapper.appendChild(avatar);
-  wrapper.appendChild(content);
-  
-  // Add the message to chat
-  chat.appendChild(wrapper);
-  
-  // Add flash effect for new messages
-  body.classList.add("flash");
-  
-  // Scroll to bottom
-  chat.scrollTop = chat.scrollHeight;
-}
-
-    function stripHtml(html) {
-      const tmp = document.createElement("DIV");
-      tmp.innerHTML = html;
-      return tmp.textContent || tmp.innerText || "";
-    }
-
-    function updateOnlineCount() {
-      fetch("/stats/online_count")
-        .then(res => res.json())
-        .then(data => {
-          let total = data.total - 1; // Exclude system user
-          document.getElementById("online-counter").innerHTML =
-            `<span>👥</span> ${data.online} / ${total}`;
-        });
-    }
-
-    // GIF Modal Functions
-    function openGIFModal() {
-      document.getElementById("gifModal").style.display = "block";
-      document.getElementById("gifSearchInput").focus();
-    }
-
-    function closeGIFModal() {
-      document.getElementById("gifModal").style.display = "none";
-    }
-
-    function searchGIFInModal() {
-      var query = document.getElementById("gifSearchInput").value;
-      if (!query) return;
-
-      var resultsContainer = document.getElementById("gifResults");
-      resultsContainer.innerHTML = "<p>Searching GIF...</p>";
-
-      fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key={{ api_key }}&limit=15`)
-        .then(response => response.json())
-        .then(data => {
-          resultsContainer.innerHTML = ""; // Clear loading message
-          if (data.results && data.results.length > 0) {
-            const gifGrid = document.createElement("div");
-            gifGrid.className = "gif-grid";
-            
-            data.results.forEach(result => {
-              var gifUrl = result.media_formats.gif.url;
-              
-              const gifItem = document.createElement("div");
-              gifItem.className = "gif-item";
-              gifItem.onclick = function() { sendGIF(gifUrl); };
-              
-              const gifImg = document.createElement("img");
-              gifImg.src = gifUrl;
-              gifImg.alt = "GIF";
-              
-              gifItem.appendChild(gifImg);
-              gifGrid.appendChild(gifItem);
-            });
-            
-            resultsContainer.appendChild(gifGrid);
-          } else {
-            resultsContainer.innerHTML = "<p>No GIFs found.</p>";
-          }
-        })
-        .catch(error => {
-          console.error("Chyba pri vyhľadávaní GIFu:", error);
-          resultsContainer.innerHTML = "<p>Error searching GIFs.</p>";
-        });
-    }
-
-    function sendGIF(gifUrl) {
-      socket.send(`<img src="${gifUrl}" alt="GIF">`);
-      closeGIFModal();
-    }
-
-    // Close modal when clicking outside of it
-    window.onclick = function(event) {
-      const modal = document.getElementById("gifModal");
-      if (event.target == modal) {
-        closeGIFModal();
-      }
-    }
-    
-    // Close modal with Escape key
-    document.addEventListener("keydown", function(event) {
-      if (event.key === "Escape") {
-        closeGIFModal();
-      }
-    });
-  </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ t('app.name') }}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('brand_logo', variant='mark') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
 </head>
 <body>
-  <!-- Hidden span for username -->
-  <span id="username-span" style="display:none;">{{ session['username'] }}</span>
-  
-  <!-- GIF Search Modal -->
-  <div id="gifModal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>Search GIF</h3>
-        <button class="modal-close" onclick="closeGIFModal()">&times;</button>
-      </div>
-      <div class="modal-search">
-        <input type="text" id="gifSearchInput" placeholder="Enter key words">
-        <button onclick="searchGIFInModal()">Search</button>
-      </div>
-      <div id="gifResults"></div>
-    </div>
-  </div>
-  
-  <!-- Mobile menu 
-  <div class="mobile-menu-toggle" onclick="toggleMobileMenu()">+</div>
-  <div class="mobile-menu">
-    <div class="mobile-menu-item" onclick="toggleDarkMode()">🌙</div>
-    <div class="mobile-menu-item" onclick="openGIFModal()">🎞️</div>
-    <div class="mobile-menu-item" onclick="document.getElementById('fileInput').click()">📁</div>
-  </div>-->
+    <div id="sidebarBackdrop" class="sidebar-backdrop hidden" onclick="closeSidebar()"></div>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div class="brand-stack">
+                <img class="brand-wordmark" src="{{ url_for('brand_logo', variant='wordmark') }}" alt="{{ app_name }} logo">
+            </div>
 
-  <div class="chat-container">
-    <div class="user-info-box" id="user-info-box">
-      <div class="user-info-left">
-        <div class="logo-container">
-          <img src="static/logo.png" alt="IntraChat Logo" class="logo">
-        </div>
-        <div class="user-details">
-          <span>{{ session['rank']|safe }} {{ session['display_name']|safe }}</span>
-          <span style="font-size:12px;">(@{{ session['username'] }})</span>
-          
-        </div>
-        <div id="online-counter">👥 ...</div>
-        <div>
-        {% if session['is_admin'] == "1" %}
-        <span class="admin-badge">🛡️ Admin</span>
-        {% endif %}
-        </div>
-      </div>
-      <div class="user-info-right">
-        <button class="btn" onclick="window.location.href='/user/{{ session['id'] }}'">My profile</button>
-        <button class="btn btn-icon" onclick="toggleDarkMode()">🌙</button>
-        <button class="btn btn-primary" onclick="logout()">Log out</button>
-      </div>
+            <section class="profile-card">
+                <img class="profile-avatar" src="{{ current_user.avatar_url }}" alt="avatar">
+                <div class="profile-meta">
+                    <strong>{{ current_user.display_label }}</strong>
+                    <span>@{{ current_user.username }}</span>
+                    <span>{{ current_user.rank or '-' }}</span>
+                </div>
+                <div class="profile-tools">
+                    <form class="language-form" method="post" action="{{ url_for('set_language') }}">
+                        <input type="hidden" name="next" value="{{ request.path }}">
+                        <label for="language">{{ t('nav.language') }}</label>
+                        <select id="language" name="language" onchange="this.form.submit()">
+                            {% for code, name in available_languages.items() %}
+                            <option value="{{ code }}" {% if code == ui_language %}selected{% endif %}>{{ name }}</option>
+                            {% endfor %}
+                        </select>
+                    </form>
+                    <button class="ghost-btn" type="button" onclick="toggleTheme()">{{ t('chat.dark_mode') }}</button>
+                </div>
+                <div class="quick-actions">
+                    <button class="ghost-btn" type="button" onclick="window.location.href='{{ url_for('user_profile', user_id=current_user.id) }}'">{{ t('chat.profile') }}</button>
+                    {% if current_user.is_admin_user %}
+                    <button class="ghost-btn" type="button" onclick="window.location.href='{{ url_for('add_user') }}'">{{ t('chat.add_user') }}</button>
+                    <button class="ghost-btn" type="button" onclick="window.location.href='{{ url_for('admin_user_list') }}'">{{ t('chat.manage_users') }}</button>
+                    {% endif %}
+                    <button class="primary-btn" type="button" onclick="logout()">{{ t('chat.logout') }}</button>
+                </div>
+            </section>
+
+            <div class="sidebar-scroll">
+                <section class="sidebar-section">
+                    <div class="section-title">{{ t('chat.rooms') }}</div>
+                    <div class="conversation-list">
+                        {% for room in chat_rooms %}
+                        <button class="conversation-item"
+                                type="button"
+                                data-conversation="{{ room.key }}"
+                                data-label="{{ room.label }}"
+                                data-kind="room">
+                            <span class="conversation-icon">{{ room.icon }}</span>
+                            <span>{{ room.label }}</span>
+                            <span class="unread-dot"></span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </section>
+
+                <section class="sidebar-section">
+                    <div class="section-title">{{ t('chat.direct') }}</div>
+                    <div class="conversation-list">
+                        {% for user in direct_users %}
+                        {% if current_user.id < user.id %}
+                        {% set pm_key = 'pm:' ~ current_user.id ~ ':' ~ user.id %}
+                        {% else %}
+                        {% set pm_key = 'pm:' ~ user.id ~ ':' ~ current_user.id %}
+                        {% endif %}
+                        <button class="conversation-item conversation-user"
+                                type="button"
+                                data-conversation="{{ pm_key }}"
+                                data-label="{{ user.display_name }}"
+                                data-kind="pm">
+                            <img src="{{ user.profile_picture }}" alt="{{ user.username }}">
+                            <span>{{ user.display_name }}</span>
+                            <small>@{{ user.username }}</small>
+                            <span class="unread-dot"></span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </section>
+            </div>
+        </aside>
+
+        <main class="chat-panel">
+            <header class="chat-header">
+                <div class="chat-header-main">
+                    <button class="mobile-menu-btn icon-btn" type="button" onclick="toggleSidebar()">menu</button>
+                    <div>
+                    <p class="eyebrow" id="conversationType">{{ t('chat.room') }}</p>
+                    <h2 id="conversationTitle">{{ chat_rooms[0].label if chat_rooms else t('app.name') }}</h2>
+                    </div>
+                </div>
+                <div class="chat-header-tools">
+                    <div id="onlineCounter" class="counter-pill">{{ t('chat.online') }}: ...</div>
+                    <button class="ghost-btn" type="button" onclick="openGIFModal()">{{ t('chat.search_gif') }}</button>
+                </div>
+            </header>
+
+            <div id="pinnedBanner" class="pinned-banner hidden"></div>
+            <div id="chat" class="message-stream"></div>
+
+            <div class="composer">
+                <input type="file" id="fileInput" hidden onchange="uploadFile()">
+                <button class="icon-btn" type="button" onclick="document.getElementById('fileInput').click()">+</button>
+                <input id="message" type="text" placeholder="{{ t('chat.message_placeholder') }}" autocomplete="off">
+                <button class="icon-btn" type="button" onclick="openGIFModal()">GIF</button>
+                <button class="send-btn" type="button" onclick="sendMessage()">{{ t('chat.send') }}</button>
+            </div>
+        </main>
     </div>
 
-    <div id="chat"></div>
-
-    <div class="input-container">
-      <div class="input-wrapper">
-        <input type="text" id="message" placeholder="Send message...">
-      </div>
-      <div class="input-actions">
-        <button class="action-btn" onclick="openGIFModal()">🎞️</button>
-        <input type="file" id="fileInput" onchange="uploadFile()">
-        <button class="action-btn" onclick="document.getElementById('fileInput').click()">📁</button>
-        <button class="send-btn" onclick="sendMessage()">➤</button>
-      </div>
+    <div id="gifModal" class="modal hidden">
+        <div class="modal-card">
+            <div class="modal-head">
+                <h3>{{ t('chat.search_gif') }}</h3>
+                <button class="icon-btn" type="button" onclick="closeGIFModal()">x</button>
+            </div>
+            <div class="modal-search">
+                <input id="gifSearchInput" type="text" placeholder="{{ t('chat.search_gif_placeholder') }}">
+                <button class="primary-btn" type="button" onclick="searchGIFInModal()">{{ t('chat.search') }}</button>
+            </div>
+            <div id="gifResults" class="gif-results"></div>
+        </div>
     </div>
-  </div>
+
+    <script>
+        const socket = io();
+        const appName = {{ app_name | tojson }};
+        const currentUser = {{ current_user_payload | tojson }};
+        const ui = {{ ui_messages | tojson }};
+        let currentConversation = null;
+
+        function restoreTheme() {
+            if (localStorage.getItem("intrachat_theme") === "dark") {
+                document.body.classList.add("dark-mode");
+            }
+        }
+
+        function toggleTheme() {
+            document.body.classList.toggle("dark-mode");
+            localStorage.setItem(
+                "intrachat_theme",
+                document.body.classList.contains("dark-mode") ? "dark" : "light"
+            );
+        }
+
+        function logout() {
+            window.location.href = "{{ url_for('logout') }}";
+        }
+
+        function syncSidebarState() {
+            const isOpen = document.body.classList.contains("sidebar-open");
+            document.getElementById("sidebarBackdrop").classList.toggle("hidden", !isOpen);
+        }
+
+        function toggleSidebar() {
+            document.body.classList.toggle("sidebar-open");
+            syncSidebarState();
+        }
+
+        function closeSidebar() {
+            document.body.classList.remove("sidebar-open");
+            syncSidebarState();
+        }
+
+        function conversationButtons() {
+            return Array.from(document.querySelectorAll(".conversation-item"));
+        }
+
+        function conversationButtonForKey(key) {
+            return document.querySelector(`.conversation-item[data-conversation="${key}"]`);
+        }
+
+        function markUnread(key) {
+            const button = conversationButtonForKey(key);
+            if (button && !button.classList.contains("active")) {
+                button.classList.add("has-unread");
+            }
+        }
+
+        function clearUnread(key) {
+            const button = conversationButtonForKey(key);
+            if (button) {
+                button.classList.remove("has-unread");
+            }
+        }
+
+        function setConversationMeta(button) {
+            document.getElementById("conversationTitle").textContent = button.dataset.label;
+            document.getElementById("conversationType").textContent =
+                button.dataset.kind === "pm" ? ui.chat_pm_with : ui.chat_room;
+        }
+
+        async function loadPinned() {
+            if (!currentConversation) return;
+            const banner = document.getElementById("pinnedBanner");
+            const response = await fetch(`/pinned?conversation=${encodeURIComponent(currentConversation)}`);
+            const data = await response.json();
+            if (data.pinned) {
+                banner.classList.remove("hidden");
+                banner.innerHTML = `<strong>${ui.chat_pinned}:</strong> ${data.pinned.html}`;
+            } else {
+                banner.classList.add("hidden");
+                banner.innerHTML = "";
+            }
+        }
+
+        function emptyState() {
+            const chat = document.getElementById("chat");
+            chat.innerHTML = `<div class="empty-state">${ui.no_messages}</div>`;
+        }
+
+        async function loadConversation() {
+            if (!currentConversation) return;
+            const chat = document.getElementById("chat");
+            chat.innerHTML = "";
+
+            const response = await fetch(`/history?conversation=${encodeURIComponent(currentConversation)}`);
+            const messages = await response.json();
+
+            if (!Array.isArray(messages) || messages.length === 0) {
+                emptyState();
+            } else {
+                messages.forEach((message) => appendMessage(message, false));
+            }
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function appendMessage(data, autoScroll = true) {
+            const chat = document.getElementById("chat");
+            const empty = chat.querySelector(".empty-state");
+            if (empty) {
+                empty.remove();
+            }
+
+            const wrapper = document.createElement("article");
+            wrapper.className = "message-card";
+            if (data.author === currentUser.username) {
+                wrapper.classList.add("own");
+            }
+            if (data.author === "System") {
+                wrapper.classList.add("system");
+            }
+            wrapper.id = `msg-${data.id}`;
+
+            const avatar = document.createElement("img");
+            avatar.className = "message-avatar";
+            avatar.src = data.profile_picture || "/propic/default.png";
+            avatar.alt = data.author;
+            avatar.onerror = () => {
+                avatar.src = "/propic/default.png";
+            };
+
+            const body = document.createElement("div");
+            body.className = "message-body";
+
+            const header = document.createElement("div");
+            header.className = "message-head";
+            header.innerHTML = `
+                <span class="message-name">${data.display_name || data.author}</span>
+                <span class="message-rank">${data.rank || ""}</span>
+                <span class="message-time">${data.timestamp || ""}</span>
+                ${currentUser.is_admin && data.id > 0 ? `<span class="message-id">#${data.id}</span>` : ""}
+            `;
+
+            const content = document.createElement("div");
+            content.className = "message-html";
+            content.innerHTML = data.html || data.message || "";
+
+            body.appendChild(header);
+            body.appendChild(content);
+
+            if ((data.author === currentUser.username || currentUser.is_admin) && data.id > 0) {
+                const deleteButton = document.createElement("button");
+                deleteButton.className = "delete-btn";
+                deleteButton.type = "button";
+                deleteButton.textContent = "delete";
+                deleteButton.onclick = () => socket.emit("delete_message", { id: data.id });
+                body.appendChild(deleteButton);
+            }
+
+            wrapper.appendChild(avatar);
+            wrapper.appendChild(body);
+            chat.appendChild(wrapper);
+
+            if (autoScroll) {
+                chat.scrollTop = chat.scrollHeight;
+            }
+        }
+
+        async function selectConversation(button) {
+            conversationButtons().forEach((item) => item.classList.remove("active"));
+            button.classList.add("active");
+            currentConversation = button.dataset.conversation;
+            localStorage.setItem("intrachat_conversation", currentConversation);
+            setConversationMeta(button);
+            clearUnread(currentConversation);
+            await loadConversation();
+            await loadPinned();
+            if (window.innerWidth <= 980) {
+                closeSidebar();
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById("message");
+            const message = input.value.trim();
+            if (!message || !currentConversation) {
+                return;
+            }
+            socket.emit("message", { message, conversation: currentConversation });
+            input.value = "";
+        }
+
+        function uploadFile() {
+            const fileInput = document.getElementById("fileInput");
+            const file = fileInput.files[0];
+            if (!file || !currentConversation) {
+                return;
+            }
+
+            const chat = document.getElementById("chat");
+            chat.insertAdjacentHTML("beforeend", `<div class="inline-status">${ui.uploading}</div>`);
+            chat.scrollTop = chat.scrollHeight;
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            fetch("/upload", { method: "POST", body: formData })
+                .then((response) => response.json())
+                .then((data) => {
+                    document.querySelector(".inline-status")?.remove();
+                    if (!data.file_url) {
+                        throw new Error("upload_failed");
+                    }
+
+                    let payload = `<a href="${data.file_url}" target="_blank" rel="noopener">download: ${file.name}</a>`;
+                    if (file.type.startsWith("image/")) {
+                        payload = `<img src="${data.file_url}" alt="${file.name}">`;
+                    } else if (file.type.startsWith("video/")) {
+                        payload = `<video controls><source src="${data.file_url}"></video>`;
+                    } else if (file.type.startsWith("audio/")) {
+                        payload = `<audio controls><source src="${data.file_url}"></audio>`;
+                    }
+                    socket.emit("message", { message: payload, conversation: currentConversation });
+                })
+                .catch(() => {
+                    document.querySelector(".inline-status")?.remove();
+                    chat.insertAdjacentHTML("beforeend", `<div class="inline-status error">${ui.upload_error}</div>`);
+                })
+                .finally(() => {
+                    fileInput.value = "";
+                });
+        }
+
+        function openGIFModal() {
+            document.getElementById("gifModal").classList.remove("hidden");
+            document.getElementById("gifSearchInput").focus();
+        }
+
+        function closeGIFModal() {
+            document.getElementById("gifModal").classList.add("hidden");
+            document.getElementById("gifResults").innerHTML = "";
+        }
+
+        function searchGIFInModal() {
+            const query = document.getElementById("gifSearchInput").value.trim();
+            const results = document.getElementById("gifResults");
+            if (!query) {
+                return;
+            }
+
+            results.innerHTML = "<p>...</p>";
+            fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key={{ api_key }}&limit=12`)
+                .then((response) => response.json())
+                .then((data) => {
+                    results.innerHTML = "";
+                    if (!data.results || data.results.length === 0) {
+                        results.innerHTML = `<p>${ui.no_gifs}</p>`;
+                        return;
+                    }
+                    const grid = document.createElement("div");
+                    grid.className = "gif-grid";
+                    data.results.forEach((result) => {
+                        const url = result.media_formats.gif.url;
+                        const button = document.createElement("button");
+                        button.type = "button";
+                        button.className = "gif-tile";
+                        button.innerHTML = `<img src="${url}" alt="gif">`;
+                        button.onclick = () => sendGIF(url);
+                        grid.appendChild(button);
+                    });
+                    results.appendChild(grid);
+                })
+                .catch(() => {
+                    results.innerHTML = `<p>${ui.gif_error}</p>`;
+                });
+        }
+
+        function sendGIF(url) {
+            socket.emit("message", { message: `<img src="${url}" alt="GIF">`, conversation: currentConversation });
+            closeGIFModal();
+        }
+
+        function stripHtml(html) {
+            const temp = document.createElement("div");
+            temp.innerHTML = html;
+            return temp.textContent || temp.innerText || "";
+        }
+
+        function updateOnlineCount() {
+            fetch("/stats/online_count")
+                .then((response) => response.json())
+                .then((data) => {
+                    document.getElementById("onlineCounter").textContent = `${ui.chat_online}: ${data.online} / ${data.total}`;
+                });
+        }
+
+        document.addEventListener("DOMContentLoaded", async () => {
+            restoreTheme();
+
+            conversationButtons().forEach((button) => {
+                button.addEventListener("click", () => selectConversation(button));
+            });
+
+            const stored = localStorage.getItem("intrachat_conversation");
+            const fallback = conversationButtons()[0];
+            const button = stored ? conversationButtonForKey(stored) : null;
+            await selectConversation(button || fallback);
+
+            document.getElementById("message").addEventListener("keydown", (event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
+                }
+            });
+
+            updateOnlineCount();
+            setInterval(updateOnlineCount, 10000);
+            syncSidebarState();
+        });
+
+        socket.on("message", (data) => {
+            if (!data.room_key) {
+                return;
+            }
+
+            if (data.room_key === currentConversation) {
+                appendMessage(data, true);
+            } else {
+                markUnread(data.room_key);
+            }
+
+            if ("Notification" in window) {
+                if (Notification.permission !== "granted") {
+                    Notification.requestPermission();
+                }
+
+                if (Notification.permission === "granted" && !document.hasFocus()) {
+                    new Notification(appName, {
+                        body: `${data.display_name || data.author}: ${stripHtml(data.html || "")}`
+                    });
+                }
+            }
+        });
+
+        socket.on("delete_message", (data) => {
+            document.getElementById(`msg-${data.id}`)?.remove();
+        });
+
+        socket.on("clear_chat", (data) => {
+            if (!data.room_key || data.room_key === currentConversation) {
+                loadConversation();
+                loadPinned();
+            }
+        });
+
+        socket.on("pinned_updated", (data) => {
+            if (!data.room_key || data.room_key === currentConversation) {
+                loadPinned();
+            }
+        });
+
+        socket.on("refresh_page", () => {
+            window.location.reload();
+        });
+
+        socket.on("force_ban_redirect", (data) => {
+            const reason = data.reason || "No reason";
+            const banUntil = data.ban_until ? `&ban_until=${encodeURIComponent(data.ban_until)}` : "";
+            window.location.href = `/ban?ban_reason=${encodeURIComponent(reason)}${banUntil}`;
+        });
+
+        socket.on("force_logout", () => {
+            window.location.href = "{{ url_for('logout') }}";
+        });
+
+        window.addEventListener("click", (event) => {
+            if (event.target.id === "gifModal") {
+                closeGIFModal();
+            }
+        });
+
+        window.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                closeGIFModal();
+                closeSidebar();
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            if (window.innerWidth > 980) {
+                closeSidebar();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="{{ brand_width }}" height="108" viewBox="0 0 {{ brand_width }} 108" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">{{ app_name }}</title>
+  <desc id="desc">Wordmark logo for {{ app_name }}</desc>
+  <defs>
+    <linearGradient id="wordmarkGradient" x1="14" y1="10" x2="92" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1CA1D8" />
+      <stop offset="0.58" stop-color="#146C94" />
+      <stop offset="1" stop-color="#0F4E6C" />
+    </linearGradient>
+    <linearGradient id="wordmarkGlow" x1="24" y1="18" x2="78" y2="80" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.34" />
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+    <filter id="wordmarkShadow" x="0" y="0" width="114" height="108" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="8" flood-color="#08151F" flood-opacity="0.22" />
+    </filter>
+  </defs>
+
+  <g filter="url(#wordmarkShadow)">
+    <rect x="12" y="12" width="84" height="84" rx="26" fill="url(#wordmarkGradient)" />
+    <rect x="20" y="20" width="68" height="68" rx="22" fill="url(#wordmarkGlow)" />
+    <path d="M30 36.5C30 32.9101 32.9101 30 36.5 30H66.5C70.0899 30 73 32.9101 73 36.5V53.5C73 57.0899 70.0899 60 66.5 60H51.3213L39.0355 69.1315C37.365 70.3731 35 69.1813 35 67.1001V60H36.5C32.9101 60 30 57.0899 30 53.5V36.5Z" fill="#F7FBFD" fill-opacity="0.13" />
+    <path d="M61.5 24L73 35.5" stroke="#F5B24A" stroke-width="5" stroke-linecap="round" />
+    <circle cx="74" cy="74" r="6.5" fill="#F5B24A" />
+    <text x="54" y="63" text-anchor="middle" fill="#F7FBFD" font-family="'Segoe UI', Arial, sans-serif" font-size="29" font-weight="800" letter-spacing="1.7">{{ app_initials }}</text>
+  </g>
+
+  <text x="124" y="58" fill="#F7FBFD" font-family="'Segoe UI', Arial, sans-serif" font-size="34" font-weight="800" letter-spacing="0.4">{{ app_name }}</text>
+  <rect x="126" y="74" width="82" height="4" rx="2" fill="#F5B24A" fill-opacity="0.92" />
+  <text x="124" y="94" fill="#D5E4EC" font-family="Consolas, 'Courier New', monospace" font-size="11" letter-spacing="3">IntraChat by AdrianSimo.eu</text>
+</svg>
