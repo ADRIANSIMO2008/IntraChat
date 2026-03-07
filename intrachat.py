@@ -171,7 +171,7 @@ if not secret_key:
         "FLASK_SECRET_KEY environment variable is required. "
         "Generate a strong key and configure it before starting the app."
     )
-
+print(f"Server started with version {VERSION} and app name '{APP_NAME}'")
 app.secret_key = secret_key
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///chat.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -1214,6 +1214,9 @@ def hourly_broadcast():
                     f"📅 Today is {datetime.now().strftime('%Y-%m-%d')}.",
                     f"⏰ Current time is {datetime.now().strftime('%H:%M:%S')}.",
                     f"👥 Online now: {len(online_users)}.",
+                    "🎉 Enjoying the chat? Consider contributing or sharing with friends!"
+                    " https://github.com/AdrianSimo2008/intrachat",
+                    "🎉 Enjoying the chat? Consider donating!"
                 ]
             )
             message = store_system_message(

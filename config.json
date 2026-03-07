@@ -3,6 +3,6 @@
   "discord_webhook_url": "discord_webhook_url_HERE",
   "server_id": "IntraServer1",
   "tenor_api_key": "tenor_api_key_HERE",
-  "FLASK_SECRET_KEY": "1cbb0766891977264ba713682b4c09845c92fa7a8ef6416a2211b4b85cef0b4a",
-  "FLASK_DEBUG": "True"
+  "FLASK_SECRET_KEY": "",
+  "FLASK_DEBUG": ""
 }
