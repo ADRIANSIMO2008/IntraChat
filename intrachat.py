@@ -1,852 +1,1348 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory, abort
-from flask_socketio import SocketIO, send, emit
-from datetime import datetime, timedelta, timezone
-from database import db, User, ChatMessage, ban_log, IPLog
-from sqlalchemy import text
-import os
-import math
-import re
-import random
-from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.routing import BaseConverter
-import psutil
-import time
-import threading
-import requests
 import json
+import os
+import random
+import re
+import threading
+import time
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from functools import wraps
 
-# Load config from environment variables with fallback to config.json
+import psutil
+import requests
+from flask import (
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    session,
+    url_for,
+)
+from flask_login import (
+    LoginManager,
+    current_user,
+    login_required,
+    login_user,
+    logout_user,
+)
+from flask_socketio import SocketIO, disconnect, emit, join_room
+from markupsafe import escape
+from sqlalchemy import inspect, or_, text
+from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.utils import secure_filename
+
+from database import ChatMessage, IPLog, User, ban_log, db
+
+VERSION = "1.0.0"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LANG_DIR = os.path.join(BASE_DIR, "lang")
+
+DEFAULT_CHAT_ROOMS = [
+    {"key": "room:general", "icon": "#", "label_key": "room.general"},
+    {"key": "room:team", "icon": "T", "label_key": "room.team"},
+    {"key": "room:dev", "icon": "D", "label_key": "room.dev"},
+    {"key": "room:support", "icon": "S", "label_key": "room.support"},
+    {"key": "room:random", "icon": "R", "label_key": "room.random"},
+]
+
+AVAILABLE_LANGUAGES = {
+    "sk": "Slovencina",
+    "en": "English",
+    "pl": "Polski",
+}
+
+def find_language_file(language_code):
+    if not os.path.isdir(LANG_DIR):
+        return None
+
+    suffix = f"-{language_code.lower()}.json"
+    matches = sorted(
+        file_name
+        for file_name in os.listdir(LANG_DIR)
+        if file_name.lower().endswith(suffix)
+    )
+    if not matches:
+        return None
+    return os.path.join(LANG_DIR, matches[0])
+
+
+def load_translations():
+    translations = {}
+
+    for language_code in AVAILABLE_LANGUAGES:
+        lang_path = find_language_file(language_code)
+        if not lang_path:
+            translations[language_code] = {}
+            continue
+
+        try:
+            with open(lang_path, "r", encoding="utf-8") as lang_file:
+                loaded = json.load(lang_file)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid translation file: {lang_path}") from exc
+
+        if not isinstance(loaded, dict):
+            raise RuntimeError(f"Translation file must contain a JSON object: {lang_path}")
+
+        translations[language_code] = loaded
+
+    translations.setdefault("en", {})
+    return translations
+
+
+TRANSLATIONS = load_translations()
+
+HELP_TEXT = (
+    "/help - show this help<br>"
+    "/date - show current date<br>"
+    "/time - show current time<br>"
+    "/uptime - show app uptime<br>"
+    "/server-uptime - show server uptime<br>"
+    "/rules - show rules<br>"
+    "/clear - clear current public room (admin)<br>"
+    "/ban username reason - ban user (admin)<br>"
+    "/unban username - unban user (admin)<br>"
+    "/tempban @username 30m reason - temp ban user (admin)<br>"
+    "/pin message_id - pin message in current public room (admin)<br>"
+    "/unpin message_id - unpin message in current public room (admin)"
+)
+ANNOUNCEMENT_ROOM = "room:general"
+
+
 try:
-    with open("config.json", "r") as config_file:
+    with open("config.json", "r", encoding="utf-8") as config_file:
         config = json.load(config_file)
 except FileNotFoundError:
     config = {}
 
+def split_app_name_tokens(app_name):
+    chunks = []
+    for segment in re.split(r"[\s_-]+", app_name.strip()):
+        chunks.extend(
+            part
+            for part in re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?=[A-Z]|$)", segment)
+            if part
+        )
+    return chunks
+
+
+def get_app_initials(app_name):
+    tokens = split_app_name_tokens(app_name)
+    if len(tokens) >= 2:
+        return "".join(token[0].upper() for token in tokens[:2])
+    if tokens:
+        return tokens[0][:2].upper()
+    return "IC"
+
+
+def get_brand_wordmark_width(app_name):
+    clean_length = max(len(app_name.strip()), 4)
+    return max(360, min(980, 150 + clean_length * 28))
+
+
+APP_NAME = str(
+    os.getenv(
+        "APP_NAME",
+        config.get("app_name", TRANSLATIONS["en"].get("app.name", "IntraChat")),
+    )
+).strip() or "IntraChat"
+APP_INITIALS = get_app_initials(APP_NAME)
+
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", config.get("discord_webhook_url", ""))
-server_id = os.getenv("SERVER_ID", config.get("server_id", "default_server"))
+SERVER_ID = os.getenv("SERVER_ID", config.get("server_id", "default_server"))
 TENOR_API_KEY = os.getenv("TENOR_API_KEY", config.get("tenor_api_key", ""))
-
-def log_to_discord(message):
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json={"content": message})
-    except Exception as e:
-        print("Failed to send to Discord:", e)
-
-def log_embed_to_discord(title, description, color=0x3498db):
-    embed = {
-        "title": title,
-        "description": description,
-        "color": color
-    }
-    payload = {
-        "embeds": [embed]
-    }
-    try:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    except Exception as e:
-        print("Failed to send embed to Discord:", e)
-
-def get_system_uptime():
-    boot_time = psutil.boot_time()
-    current_time = time.time()
-    uptime_seconds = current_time - boot_time
-    return uptime_seconds
-
-def format_uptime(seconds):
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    seconds = int(seconds % 60)
-    return f"{hours}h {minutes}m {seconds}s"
+CHAT_ROOMS = config.get("chat_rooms", DEFAULT_CHAT_ROOMS)
+ROOMS_BY_KEY = {room["key"]: room for room in CHAT_ROOMS}
 
 start_time = datetime.now()
+online_users = set()
+user_sid_map = defaultdict(set)
+user_connection_counts = defaultdict(int)
 
 app = Flask(__name__)
 
-# Require secret key for security - fail fast if not set
-secret_key = os.getenv('FLASK_SECRET_KEY')
+secret_key = os.getenv("FLASK_SECRET_KEY") or config.get("FLASK_SECRET_KEY", "")
 if not secret_key:
     raise RuntimeError(
-        "FLASK_SECRET_KEY environment variable is required for security. "
-        "Generate a strong secret key and set it in Replit Secrets. "
-        "Example: python -c 'import secrets; print(secrets.token_hex(32))'"
+        "FLASK_SECRET_KEY environment variable is required. "
+        "Generate a strong key and configure it before starting the app."
     )
-app.secret_key = secret_key
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
-#app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+mysqlconnector://intrachat_server:IntraChat123!@localhost/intrachat'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.secret_key = secret_key
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///chat.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 db.init_app(app)
 
-with app.app_context():
+login_manager = LoginManager(app)
+login_manager.login_view = "login"
+login_manager.login_message = None
+
+
+def log_to_discord(message):
+    if not DISCORD_WEBHOOK_URL:
+        return
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json={"content": message}, timeout=5)
+    except Exception as exc:
+        print("Failed to send to Discord:", exc)
+
+
+def get_system_uptime():
+    return time.time() - psutil.boot_time()
+
+
+def format_uptime(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours}h {minutes}m {secs}s"
+
+
+def ensure_database_schema():
     db.create_all()
+    inspector = inspect(db.engine)
 
-upload_folder = "uploads"
-# Check if upload folder exists
-if not os.path.exists(upload_folder):
-    os.makedirs(upload_folder)
-
-@app.route('/', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        user = User.query.filter_by(username=username).first()
-        if user and check_password_hash(user.password, request.form['password']):
-            if user.is_banned == 'Yes':
-                if user.ban_until:
-                    ban_until_naive = datetime.strptime(user.ban_until, "%Y-%m-%d %H:%M:%S.%f")
-                    if datetime.utcnow() > ban_until_naive:
-                        # Ban expired → unban
-                        user.is_banned = 'No'
-                        user.ban_reason = None
-                        user.ban_until = None
-                        db.session.commit()
-                        print(f"[INFO] User {username} was automatically unbanned (ban expired).")
-                        log_to_discord(f"{server_id}. User {username} was automatically unbanned (ban expired).")
-                    else:
-                        print(f"[INFO] User {username} is still banned until {user.ban_until}.")
-                        log_to_discord(f"{server_id}. User {username} is still banned until {user.ban_until}.")
-
-            if user.is_banned == "Yes":
-                ban_reason = user.ban_reason or "No reason provided."
-                if user.ban_until:
-                    ban_until_dt = datetime.fromisoformat(user.ban_until)
-                    ban_until = ban_until_dt.strftime("%Y-%m-%dT%H:%M:%S")
-                print(f"[INFO] User {username} is banned. Reason: {ban_reason}")
-                if user.ban_until:
-                    print(f"BAN UNTIL for {username}: {user.ban_until}")
-                    return redirect(url_for('ban', ban_reason=ban_reason, ban_until=ban_until))
-                else:
-                    return redirect(url_for('ban', ban_reason=ban_reason))
-
-            session['username'] = username
-            #session['is_admin'] = user.is_admin  
-            session['is_admin'] = (str(user.is_admin) == "1" or user.is_admin == 1)
-            session['rank'] = user.rank
-            session['display_name'] = user.display_name
-            session['id'] = user.id
-            session['ban_until'] = user.ban_until
-            session['profile_picture'] = user.profile_picture
-            # LOG IP ADDRESS
-            print(request.headers.get('X-Forwarded-For', request.remote_addr))
-            ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            ip_log = IPLog(username=username, ip_address=ip, timestamp=timestamp)
-            db.session.add(ip_log)
-            db.session.commit()
-#            if session.get('verified'):
-            return redirect(url_for('chat'))
-#            else:
-#                return redirect(url_for('verify'))
-        else: 
-            return "Invalid login credentials!", 401
-    return render_template('login.html')
-
-@app.route('/ban')
-def ban():
-    ban_reason = request.args.get("ban_reason", "No reason provided!")
-    ban_until = request.args.get("ban_until")
-    return render_template("banned.html", ban_reason=ban_reason, ban_until=ban_until)
-
-@app.route('/chat')
-def chat():
-#    if session.get('verified') != True:
-#        return redirect(url_for('verify'))
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    user = User.query.filter_by(username=session['username']).first()
-    return render_template("chat.html")
-
-@app.route('/propic/<filename>')
-def profile_pic(filename):
-    return send_from_directory('propic', filename)
-
-def serve_profile_picture(filename):
-    propic_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "propic")
-    if not os.path.exists(propic_dir):
-        os.makedirs(propic_dir)
-    
-    default_png_path = os.path.join(propic_dir, "default.png")
-    if not os.path.exists(default_png_path):
-        pass
-    
-    if not os.path.exists(os.path.join(propic_dir, filename)):
-        filename = "default.png"
-        
-    return send_from_directory("propic", filename)
-
-@app.route('/history')
-def get_history():
-    messages = ChatMessage.query.order_by(ChatMessage.id).all()
-    history = []
-    
-    for msg in messages:
-        user = User.query.filter_by(username=msg.username).first()
-        
-        message_data = {
-            "id": msg.id,
-            "message": msg.message,
-            "html": msg.message, 
-            "timestamp": msg.timestamp,
-            "author": msg.username,
-            "rank": user.rank if user and user.rank else "",
-            "display_name": user.display_name if user and user.display_name else msg.username,
-        }
-        
-        if user and user.profile_picture:
-            if user.profile_picture.startswith('/propic/'):
-                message_data["profile_picture"] = user.profile_picture
-            else:
-                message_data["profile_picture"] = "/propic/" + user.profile_picture.lstrip('/')
-        else:
-            message_data["profile_picture"] = "/propic/default.png"
-            
-        history.append(message_data)
-        
-    return jsonify(history)
-
-@app.route("/change_password", methods=["GET", "POST"])
-def change_password():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-
-    user = User.query.filter_by(username=session['username']).first()
-
-    if request.method == "POST":
-        old_password = request.form['old_password']
-        new_password = request.form['new_password']
-
-        if not check_password_hash(user.password, old_password):
-            return "Old password is incorrect!", 403
-
-        user.password = generate_password_hash(new_password)
-        log_to_discord(f"{server_id}. {session['username']} changed password")
-        db.session.commit()
-        return "Password changed successfully ✅"
-
-    return render_template("change_password.html")
-
-@app.route('/add_user', methods=['GET', 'POST'])
-def add_user():
-    if not session.get("is_admin"):
-        return "Access denied!", 403
-
-    if request.method == 'POST':
-        username = request.form['username']
-        password = generate_password_hash(request.form['password'])
-        rank = request.form['rank']
-        display_name = request.form['display_name']
-
-        if User.query.filter_by(username=username).first():
-            return "User already exists!"
-
-        new_user = User(
-            username=username,
-            password=password,
-            rank=rank,
-            display_name=display_name,
-            is_admin=False,
-            is_banned="No"
+    user_columns = {column["name"] for column in inspector.get_columns("user")}
+    if "language" not in user_columns:
+        db.session.execute(
+            text("ALTER TABLE user ADD COLUMN language VARCHAR(8) DEFAULT 'sk'")
         )
-        db.session.add(new_user)
-        log_to_discord(f"{server_id}. Admin {session['username']} added new user: {username}")
-        db.session.commit()
-        return "User added successfully ✅"
-    
-    return render_template("add_user.html")
 
-@app.route("/user/<int:id>", methods=["GET", "POST"])
-def user_profile(id):
-    user = User.query.get(id)
+    chat_columns = {column["name"] for column in inspector.get_columns("chat_message")}
+    if "room_key" not in chat_columns:
+        db.session.execute(
+            text(
+                "ALTER TABLE chat_message "
+                "ADD COLUMN room_key VARCHAR(120) DEFAULT 'room:general'"
+            )
+        )
+
+    db.session.execute(text("UPDATE user SET language = COALESCE(language, 'sk')"))
+    db.session.execute(
+        text("UPDATE chat_message SET room_key = COALESCE(room_key, 'room:general')")
+    )
+    db.session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_chat_message_room_key "
+            "ON chat_message (room_key)"
+        )
+    )
+    db.session.commit()
+
+
+with app.app_context():
+    ensure_database_schema()
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    if not user_id or not str(user_id).isdigit():
+        return None
+    return db.session.get(User, int(user_id))
+
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    return redirect(url_for("login", next=request.path))
+
+
+def admin_required(func):
+    @wraps(func)
+    @login_required
+    def wrapper(*args, **kwargs):
+        if not current_user.is_admin_user:
+            abort(403)
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def get_language():
+    if current_user.is_authenticated and current_user.language in AVAILABLE_LANGUAGES:
+        return current_user.language
+    session_language = session.get("language", "sk")
+    return session_language if session_language in AVAILABLE_LANGUAGES else "sk"
+
+
+def t(key, lang=None, **kwargs):
+    language = lang if lang in AVAILABLE_LANGUAGES else get_language()
+    if key == "app.name":
+        value = APP_NAME
+    else:
+        value = TRANSLATIONS.get(language, {}).get(key) or TRANSLATIONS["en"].get(key, key)
+    if kwargs:
+        return value.format(**kwargs)
+    return value
+
+
+def safe_redirect_target(target, fallback):
+    if target and target.startswith("/"):
+        return target
+    return fallback
+
+
+def normalize_picture(path_value):
+    if not path_value:
+        return "/propic/default.png"
+    if path_value.startswith("/propic/"):
+        return path_value
+    return f"/propic/{path_value.lstrip('/')}"
+
+
+def parse_ban_until(raw_value):
+    if not raw_value:
+        return None
+    if isinstance(raw_value, datetime):
+        return raw_value if raw_value.tzinfo else raw_value.replace(tzinfo=timezone.utc)
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(str(raw_value), fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(str(raw_value))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def refresh_ban_status(user):
     if not user:
-        return "User does not exist", 404
-
-    if request.method == "POST":
-        print("SESSION ID:", session.get("id"), type(session.get("id")))
-        print("USER PROFILE ID:", id, type(id))
-
-        if int(session.get("id")) != int(id):
-            return "No permission", 403
-
-        # Change display name
-        new_display_name = request.form.get("display_name")
-        if new_display_name:
-            user.display_name = new_display_name.strip()
-
-        # Process profile picture
-        if "profile_pic" in request.files:
-            file = request.files["profile_pic"]
-            if file and file.filename != "":
-                # Ensure propic directory exists
-                propic_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "propic")
-                if not os.path.exists(propic_dir):
-                    os.makedirs(propic_dir)
-                
-                # 🔐 secure filename
-                from werkzeug.utils import secure_filename
-                # 🏷️ filename based on user ID
-                filename = f"user_{user.id}.png"
-                filepath = os.path.join(propic_dir, secure_filename(filename))
-                # 💾 save file
-                file.save(filepath)
-                log_to_discord(f"{server_id}. {session['username']} changed profile picture")
-                
-                # 🧠 Save path to DB - always use /propic/ prefix
-                user.profile_picture = f"/propic/{filename}"
-                
-        db.session.commit()
-        return redirect(url_for("user_profile", id=id))
-
-    return render_template("user_profile.html", user=user)
-
-def is_user_banned(user):
-    now = datetime.now(timezone.utc)
-    if user.ban_until and now >= user.ban_until:
-        # Ban expired, automatically unban
+        return
+    ban_until = parse_ban_until(user.ban_until)
+    if user.is_banned_user and ban_until and datetime.now(timezone.utc) >= ban_until:
         user.is_banned = "No"
         user.ban_reason = None
         user.ban_until = None
         db.session.commit()
-        return False
-    if user.ban_until:
-        return now < user.ban_until
-    return user.is_banned == "Yes"
 
-@app.route("/admin/users", methods=["GET", "POST"])
-def admin_user_list():
-    if not session.get("is_admin"):
-        return "Access denied", 403
 
-    users = User.query.order_by(User.id).all()
-    return render_template("admin_users.html", users=users)
+def ban_redirect(user):
+    params = {"ban_reason": user.ban_reason or "No reason provided."}
+    ban_until = parse_ban_until(user.ban_until)
+    if ban_until:
+        params["ban_until"] = ban_until.isoformat()
+    return redirect(url_for("ban", **params))
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    if 'file' not in request.files:
-        return "No file uploaded", 400
-    file = request.files['file']
-    if file.filename == '':
-        return "Invalid file", 400
-    file_path = os.path.join(upload_folder, file.filename)
-    file.save(file_path)
-    return jsonify({"message": "File uploaded successfully", "file_url": url_for('uploaded_file', filename=file.filename)})
 
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(upload_folder, filename)
+def build_pm_key(user_a_id, user_b_id):
+    left, right = sorted([int(user_a_id), int(user_b_id)])
+    return f"pm:{left}:{right}"
 
-online_users = set()
 
-# PINNED MESSAGE (only one for simplicity)
-pinned_message = None
+def personal_room(user_id):
+    return f"user:{int(user_id)}"
 
-# TEMP BANS (username: unban_time)
-temp_bans = {}
 
-def parse_duration(duration_str):
-    match = re.match(r"(\d+)([smhd])", duration_str)
-    if not match:
+def is_public_room(room_key):
+    return room_key in ROOMS_BY_KEY
+
+
+def parse_pm_users(room_key):
+    parts = room_key.split(":")
+    if len(parts) != 3 or parts[0] != "pm":
         return None
-    amount, unit = match.groups()
-    amount = int(amount)
-    if unit == "s":
-        return timedelta(seconds=amount)
-    elif unit == "m":
-        return timedelta(minutes=amount)
-    elif unit == "h":
-        return timedelta(hours=amount)
-    elif unit == "d":
-        return timedelta(days=amount)
-    return None
+    if not parts[1].isdigit() or not parts[2].isdigit():
+        return None
+    return int(parts[1]), int(parts[2])
+
+
+def can_access_conversation(room_key, user):
+    if not room_key or not user:
+        return False
+    if is_public_room(room_key):
+        return True
+    pm_users = parse_pm_users(room_key)
+    return bool(pm_users and int(user.id) in pm_users)
+
+
+def serialize_user_summary(user):
+    return {
+        "id": user.id,
+        "username": user.username,
+        "display_name": user.display_label,
+        "rank": user.rank or "",
+        "profile_picture": normalize_picture(user.profile_picture),
+        "is_admin": user.is_admin_user,
+        "language": user.language or "sk",
+    }
+
+
+def serialize_message(message, lookup=None):
+    if lookup is None:
+        usernames = [message.username]
+        lookup = {
+            user.username: user
+            for user in User.query.filter(User.username.in_(usernames)).all()
+        }
+
+    author = lookup.get(message.username)
+    return {
+        "id": message.id,
+        "message": message.message,
+        "html": message.message,
+        "timestamp": message.timestamp,
+        "author": message.username,
+        "display_name": author.display_label if author else message.username,
+        "rank": author.rank if author and author.rank else "",
+        "profile_picture": normalize_picture(author.profile_picture if author else None),
+        "room_key": message.room_key or ANNOUNCEMENT_ROOM,
+        "is_pinned": bool(message.is_pinned),
+    }
+
+
+def build_system_payload(html, room_key, timestamp=None):
+    payload_time = timestamp or datetime.now().strftime("%H:%M:%S")
+    return {
+        "id": -1,
+        "message": html,
+        "html": html,
+        "timestamp": payload_time,
+        "author": "System",
+        "display_name": t("chat.system", "en"),
+        "rank": "",
+        "profile_picture": "/propic/default.png",
+        "room_key": room_key,
+        "is_pinned": False,
+    }
+
+
+def store_system_message(html, room_key):
+    message = ChatMessage(
+        username="System",
+        message=html,
+        formatted_message=html,
+        timestamp=datetime.now().strftime("%H:%M:%S"),
+        room_key=room_key,
+    )
+    db.session.add(message)
+    db.session.commit()
+    return message
+
+
+def emit_to_conversation(event_name, payload, room_key):
+    if is_public_room(room_key):
+        socketio.emit(event_name, payload, room=room_key)
+        return
+
+    pm_users = parse_pm_users(room_key)
+    if not pm_users:
+        return
+    delivered_to = set()
+    for user_id in pm_users:
+        room_name = personal_room(user_id)
+        if room_name not in delivered_to:
+            socketio.emit(event_name, payload, room=room_name)
+            delivered_to.add(room_name)
+
+
+def emit_to_user(user, event_name, payload):
+    socketio.emit(event_name, payload, room=personal_room(user.id))
+
+
+def load_history(room_key):
+    messages = (
+        ChatMessage.query.filter_by(room_key=room_key)
+        .order_by(ChatMessage.id.asc())
+        .all()
+    )
+    usernames = {message.username for message in messages if message.username}
+    lookup = (
+        {user.username: user for user in User.query.filter(User.username.in_(usernames)).all()}
+        if usernames
+        else {}
+    )
+    return [serialize_message(message, lookup) for message in messages]
+
+
+def get_pinned_message(room_key):
+    return (
+        ChatMessage.query.filter_by(room_key=room_key, is_pinned=True)
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+
+
+def build_announcement_html(raw_text):
+    announcement_text = str(escape(raw_text.strip())).replace("\n", "<br>")
+    if not announcement_text:
+        return ""
+    return f"<div class='announcement'>{announcement_text}</div>"
+
+
+def prepare_user_message(raw_message, is_admin_message=False):
+    cleaned = raw_message.strip()
+    if not cleaned:
+        return ""
+
+    if is_admin_message and cleaned.startswith("ANNOUNCEMENT:"):
+        return build_announcement_html(cleaned.split(":", 1)[1])
+
+    if cleaned.startswith(("<img ", "<video", "<audio", "<a ")):
+        return cleaned
+
+    gif_pattern = re.compile(r"(https?://[^\s]+\.gif)", re.IGNORECASE)
+    if gif_pattern.search(cleaned):
+        return gif_pattern.sub(
+            r"<img src='\1' style='max-width: 240px; max-height: 240px;' alt='GIF'>",
+            cleaned,
+        )
+
+    return str(escape(cleaned)).replace("\n", "<br>")
+
+
+def announcement_target(room_key):
+    return room_key if is_public_room(room_key) else ANNOUNCEMENT_ROOM
+
+
+def is_delete_allowed(message, user):
+    return bool(message and user and (message.username == user.username or user.is_admin_user))
+
+
+def create_ip_log(user):
+    ip_address = request.headers.get("X-Forwarded-For", request.remote_addr)
+    db.session.add(
+        IPLog(
+            username=user.username,
+            ip_address=ip_address,
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    )
+    db.session.commit()
+
 
 def temp_ban_user(target_username, duration_str, reason, admin_username):
-    delta = parse_duration(duration_str)
-    if not delta:
-        return "❌ Invalid ban duration. Use e.g. 30m, 2h, 1d."
+    match = re.fullmatch(r"(\d+)([smhd])", duration_str.strip().lower())
+    if not match:
+        return False, "Invalid ban duration. Use 30m, 2h or 1d."
 
-    ban_until = datetime.now(timezone.utc) + delta
-
+    amount = int(match.group(1))
+    unit = match.group(2)
+    delta_map = {
+        "s": timedelta(seconds=amount),
+        "m": timedelta(minutes=amount),
+        "h": timedelta(hours=amount),
+        "d": timedelta(days=amount),
+    }
     user = User.query.filter_by(username=target_username).first()
     if not user:
-        return f"❌ User {target_username} does not exist."
+        return False, f"User {escape(target_username)} does not exist."
 
-    user.ban_until = ban_until
+    ban_until = datetime.now(timezone.utc) + delta_map[unit]
     user.is_banned = "Yes"
     user.ban_reason = reason
-    db.session.commit()
-
-    log_entry = ban_log(
-        type="tempban",
-        user=target_username,
-        reason=reason,
-        admin=admin_username,
-        time=datetime.now().strftime("%H:%M:%S")
-    )
-    db.session.add(log_entry)
-    db.session.commit()
-
-    return f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] ⏱️ User <b>{target_username}</b> has been temporarily banned until {ban_until.strftime('%Y-%m-%d %H:%M:%S UTC')}. Reason: {reason}"
-
-@app.route('/pinned')
-def get_pinned():
-    return jsonify({'pinned': pinned_message})
-
-@app.route('/stats/online_count')
-def online_count():
-    total_users = User.query.count()
-    online_count = len(online_users)
-    return jsonify({
-        "online": online_count,
-        "total": total_users
-    })
-
-# Global variable for spam control during connection
-last_join_times = {}
-user_sid_map = {}
-
-@app.post("/ban_user")
-def ban_user():
-    if not session.get("is_admin"):
-        return "Forbidden", 403
-    user_id = request.form["user_id"]
-    reason = request.form["reason"]
-    user = User.query.get(user_id)
-    if user:
-        user.is_banned = "Yes"
-        user.ban_reason = reason
-        db.session.commit()
-
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = ban_log(
-            type="ban",
-            user=user.username,
-            reason=reason,
-            admin=session['username'],
-            time=timestamp
-        )
-        db.session.add(log_entry)
-        log_to_discord(f"{server_id}. {session['username']} banned user {user.username}")
-        db.session.commit()
-
-        # ➕ Send message to chat
-        msg = f"[<i>{timestamp}</i>] ⛔ <b>{user.username}</b> was banned by admin <b>{session['username']}</b>.<br>Reason: <i>{reason}</i>"
-        socketio.emit("message", msg)
-
-    return redirect(url_for("admin_user_list"))
-
-@app.post("/update_rank")
-def update_rank():
-    if not session.get("is_admin"):
-        return "Forbidden", 403
-
-    user_id = request.form["user_id"]
-    new_rank = request.form["new_rank"]
-    user = User.query.get(user_id)
-
-    if user:
-        user.rank = new_rank
-        log_to_discord(f"{server_id}. {session['username']} changed rank of user {user.username} to {new_rank}")
-        db.session.commit()
-
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        message = f"[<i>{timestamp}</i>] 🏅 Admin <b>{session['username']}</b> changed rank of user <b>{user.username}</b> to <b>{new_rank}</b>"
-        socketio.emit("message", message, namespace="/")
-
-    return redirect(url_for("admin_user_list"))
-
-def hourly_broadcast():
-    while True:
-        time.sleep(1800)  # 0.5 hour
-        with app.app_context():
-            total_users = User.query.count()
-            online_users_hourly = len(online_users)
-            random_messages = [
-                "💡 Tip: Don't forget to change your password occasionally!",
-                "🤖 Did you know you can use the /help command to display help?",
-                "📌 Pinned messages won't be deleted by /clear!",
-                "⏱️ Have you tried the /uptime command?",
-                "👋 Don't forget to greet others in the chat!",
-                "🛡️ If you have any problems, don't hesitate to contact an administrator.",
-                "🔒 Security first! Never share your password.",
-                f"📅 Today is {datetime.now().strftime('%Y-%m-%d')}.",
-                f"⏰ Current time is {datetime.now().strftime('%H:%M:%S')}.",
-                "🖼️ Add your profile picture in MY PROFILE.",
-                f"📊 Total number of users: {total_users}.",
-                f"👤 Currently online: {online_users_hourly}.",
-                "All messages are monitored by the administrator.",
-                "Don't forget to read the chat rules.",
-                "If you have any questions, don't hesitate to ask an administrator.",
-                "RULES: NO SWEARING, NO LAW BREAKING, NO SPAMMING, REPORT ANY CHAT BUGS TO THE ADMIN.",
-                "If you don't like something, message the admin."
-            ]
-            message = random.choice(random_messages)
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            html = f"[<i>{timestamp}</i>] 🤖 <i>{message}</i>"
-            socketio.emit("message", {
-                "html": html,
-                "id": -1,
-                "author": "System"
-            })
-
-@app.post("/unban_user")
-def unban_user():
-    if not session.get("is_admin"):
-        return "Forbidden", 403
-    user_id = request.form["user_id"]
-    user = User.query.get(user_id)
-    if user:
-        user.is_banned = "No"
-        user.ban_reason = None
-        user.ban_until = None
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = ban_log(type="unban", user=user.username, reason='unban', admin=session['username'], time=timestamp)
-        db.session.add(log_entry)
-        log_to_discord(f"{server_id}. {session['username']} unbanned user {user.username}")
-        db.session.commit()
-    return redirect(url_for("admin_user_list"))
-
-@socketio.on('connect')
-def handle_connect():
-    global online_users
-    username = session.get('username')
-    sid = request.sid  # get Socket.IO session ID
-    
-    if username:
-        user_sid_map[username] = sid  # remember for later kick
-        now = datetime.now()
-        online_users.add(username)
-        last_time = last_join_times.get(username)
-        user = User.query.filter_by(username=username).first()
-        if user and user.is_banned == "Yes":
-            reason = user.ban_reason or "No reason"
-            target_sid = user_sid_map.get(username)
-            if target_sid:
-                socketio.emit('force_ban_redirect', {'reason': reason, 'ban_until': user.ban_until}, room=target_sid)
-                return  # Don't continue processing the message
-        if not last_time or (now - last_time).total_seconds() > 5:
-            timestamp = now.strftime("%H:%M:%S")
-            join_message = f"<i>[{timestamp}]</i> 🟢 <b>{username}</b> joined the chat"
-            socketio.emit("message", {
-                "html": join_message,
-                "id": -1,
-                "author": username
-            })
-            last_join_times[username] = now
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    global online_users
-    username = session.get('username')
-    if username:
-        now = datetime.now()
-        last_time = last_join_times.get(username)
-        online_users.discard(username)
-        if not last_time or (now - last_time).total_seconds() > 5:
-            # Last connection was long ago – show message
-            timestamp = now.strftime("%H:%M:%S")
-            leave_message = f"<i>[{timestamp}]</i> 🔴 <b>{username}</b> left the chat"
-            socketio.emit("message", {
-                "html": leave_message,
-                "id": -1,
-                "author": username
-            })
-            last_join_times[username] = now  # update time
-            user_sid_map.pop(username, None)
-
-@socketio.on('ban_user')
-def handle_user_ban(data):
-    banned_username = data.get('username')
-    reason = data.get('reason', 'No reason specified')
-
-    user = User.query.filter_by(username=banned_username).first()
-    if user:
-        user.is_banned = "Yes"
-        user.ban_reason = reason
-        db.session.commit()
-
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        ban_announcement = f"<i>[{timestamp}]</i> ❌ <b>{banned_username}</b> was banned. Reason: {reason}"
-
-        db.session.add(ChatMessage(username="System", message=ban_announcement, timestamp=timestamp))
-        log_to_discord(f"{server_id}. {session['username']} banned user {banned_username} (VIA ADMIN PANEL)")
-        db.session.commit()
-
-        socketio.emit('message', ban_announcement)
-
-        target_sid = user_sid_map.get(banned_username)
-        if target_sid:
-            socketio.emit('force_ban_redirect', {'reason': reason}, room=target_sid)
-
-@socketio.on('delete_message')
-def handle_delete_message(data):
-    msg_id = data.get("id")
-    username = session.get("username")
-    is_admin = session.get("is_admin")
-
-    message = ChatMessage.query.filter_by(id=msg_id).first()
-
-    if message:
-        if message.username == username or is_admin:
-            db.session.delete(message)
-            db.session.commit()
-            socketio.emit('delete_message', {'id': msg_id})  # send to everyone the message ID to remove
-
-@socketio.on('message')
-def handle_message(msg):
-    username = session.get('username', 'Unknown')
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    date = datetime.now().strftime("%Y-%m-%d")
-    print(f"[LOG] {username}: {msg}")
-
-    # Load user from DB
-    user = User.query.filter_by(username=username).first()
-    if user and user.is_banned == "Yes":
-        reason = user.ban_reason or "No reason"
-        target_sid = user_sid_map.get(username)
-        if target_sid:
-            socketio.emit('force_ban_redirect', {'reason': reason}, room=target_sid)
-        return  # Don't continue processing the message
-
-    # Automatic replacement of .gif links with <img>
-    if ".gif" in msg and "<img" not in msg:
-        gif_pattern = re.compile(r"(https?://[^\s]+\.gif)")
-        msg = gif_pattern.sub(r"<img src='\1' style='max-width: 200px; max-height: 200px;' alt='GIF'>", msg)
-
-    # Command processing
-    if msg.startswith("/"):
-        if msg.startswith("/date") or msg.startswith("/DATE"):
-            formatted_msg = f"User {username} used command /date: {date}"
-        elif msg.startswith("/time"):
-            formatted_msg = f"User {username} used command /time: {timestamp}"
-        elif msg.startswith("/help"):
-            formatted_msg = (
-                "Command: /help - Show help<br>"
-                "Command: /date - Show current date<br>"
-                "Command: /time - Show current time<br>"
-                "Command: /uptime - Show chat server uptime<br>"
-                "Command: /server-uptime - Show server uptime<br>"
-                "Command: /rules - Show rules<br>"
-            )
-        elif msg.startswith("/rules"):
-            formatted_msg = (
-                "RULES: NO SWEARING <br>NO LAW BREAKING <br>DON'T SEND THINGS YOU MIGHT REGRET <br>REPORT ANY CHAT BUGS TO THE ADMIN"
-            )
-        elif msg.startswith("/clear") and session.get('is_admin', False):
-            ChatMessage.query.filter_by(is_pinned=False or None).delete()
-            log_to_discord(f"{server_id}. {session['username']} cleared chat")
-            db.session.commit()
-            formatted_msg = f"[<i>{timestamp}</i>] <b>{username}</b> cleared the chat!"
-            socketio.emit("clear_chat")
-        elif msg.startswith("/ban") and session.get('is_admin', False):
-            parts = msg.split(" ", 2)
-            if len(parts) < 3:
-                formatted_msg = f"❌ Usage: /ban username reason"
-            else:
-                target_username = parts[1]
-                reason = parts[2]
-
-                user_to_ban = User.query.filter_by(username=target_username).first()
-                if user_to_ban:
-                    user_to_ban.is_banned = "Yes"
-                    user_to_ban.ban_reason = reason
-                    log_entry = ban_log(type="ban", user=target_username, reason=reason, admin=username, time=timestamp)
-                    db.session.add(log_entry)
-                    log_to_discord(f"{server_id}. {username} banned user {target_username}")
-                    db.session.commit()
-                    formatted_msg = f"[<i>{timestamp}</i>] 🔨 User <b>{target_username}</b> was banned. Reason: {reason}"
-                    target_sid = user_sid_map.get(target_username)
-                    if target_sid:
-                        socketio.emit('force_ban_redirect', {'reason': reason}, room=target_sid)
-                    # Save message to DB
-                    db.session.add(ChatMessage(username="System", message=formatted_msg, timestamp=timestamp))
-                    db.session.commit()
-                else:
-                    formatted_msg = f"❌ User {target_username} does not exist"
-        elif msg.startswith("/unban") and session.get('is_admin', False):
-            parts = msg.split(" ", 1)
-            if len(parts) < 2:
-                formatted_msg = f"❌ Usage: /unban username"
-            else:
-                target_username = parts[1]
-                user_to_unban = User.query.filter_by(username=target_username).first()
-                if user_to_unban:
-                    user_to_unban.is_banned = ""
-                    user_to_unban.ban_reason = ""
-                    log_entry = ban_log(type="unban", user=target_username, reason='unban', admin=username, time=timestamp)
-                    db.session.add(log_entry)
-                    log_to_discord(f"{server_id}. {username} unbanned user {target_username}")
-                    db.session.commit()
-                    formatted_msg = f"[<i>{timestamp}</i>] 🔨 User <b>{target_username}</b> was unbanned."
-                    # Save message to DB
-                    db.session.add(ChatMessage(username="System", message=formatted_msg, timestamp=timestamp))
-                    db.session.commit()
-                else:
-                    formatted_msg = f"❌ User {target_username} does not exist"
-        elif msg.startswith("/deladmin") and username == "System":
-            parts = msg.split(" ", 1)
-            if len(parts) < 2:
-                formatted_msg = f"Usage: /deladmin username"
-            else:
-                target_username = parts[1]
-                user_to_unadmin = User.query.filter_by(username=target_username).first()
-                if user_to_unadmin:
-                    user_to_unadmin.is_admin = False
-                    db.session.commit()
-                    formatted_msg = f"[<i>{timestamp}</i>] 🔨 User <b>{target_username}</b> was removed as ADMIN."
-                    # Save message to DB
-                    db.session.add(ChatMessage(username="System", message=formatted_msg, timestamp=timestamp))
-                    log_to_discord(f"{server_id}. {username} removed admin {target_username}")
-                    db.session.commit()
-                else:
-                    formatted_msg = f"❌ User {target_username} does not exist"
-        elif msg.startswith("/makeadmin") and username == "System":
-            parts = msg.split(" ", 1)
-            if len(parts) < 2:
-                formatted_msg = f"Usage: /makeadmin username"
-            else:
-                target_username = parts[1]
-                user_to_admin = User.query.filter_by(username=target_username).first()
-                if user_to_admin:
-                    user_to_admin.is_admin = True
-                    db.session.commit()
-                    formatted_msg = f"[<i>{timestamp}</i>] 🔨 User <b>{target_username}</b> was added as ADMIN."
-                # Uložiť správu do DB
-                    db.session.add(ChatMessage(username="System", message=formatted_msg, timestamp=timestamp))
-                    log_to_discord(f"{server_id}. {username} added admin {target_username}")
-                    db.session.commit()
-                else:
-                    formatted_msg = f"❌ User {target_username} does not exist"
-        elif msg.startswith("/uptime"):
-            uptime = datetime.now() - start_time
-            hours, remainder = divmod(uptime.total_seconds(), 3600)
-            minutes, seconds = divmod(remainder, 60)
-            formatted_msg = f"🕒 Server runs for {int(hours)}h {int(minutes)}m {int(seconds)}s"
-        elif msg.startswith("/server-uptime"):
-            uptime_seconds = get_system_uptime()
-            if uptime_seconds is not None:
-                uptime_str = format_uptime(uptime_seconds)
-                formatted_msg = f"🖥️ Server uptime: {uptime_str}"
-            else:
-                formatted_msg = "⚠️ Error."
-        elif msg.startswith("/tempban") and session.get('is_admin', False):
-            parts = msg.split()
-            if len(parts) < 4:
-                formatted_msg = "❌ Usage: /tempban @username 2h reason"
-            else:
-                target = parts[1].lstrip("@")
-                duration = parts[2]
-                reason = " ".join(parts[3:])
-                result = temp_ban_user(target, duration, reason, session["username"])
-                formatted_msg = result
-        elif msg.startswith("/pin") and session.get('is_admin', False):
-            parts = msg.split(" ", 1)
-            if len(parts) < 2:
-                formatted_msg = "❌ Usage: /pin [message_id]"
-            else:
-                try:
-                    msg_id = int(parts[1])
-                    message = ChatMessage.query.get(msg_id)
-                    if message:
-                        message.is_pinned = True
-                        db.session.commit()
-                        pinned_msg_html = message.message
-                        pinned_message = pinned_msg_html
-                        formatted_msg = f"📌 Message ID {msg_id} was pinned."
-                    else:
-                        formatted_msg = f"❌ Message ID {msg_id} does not exist."
-                except ValueError:
-                    formatted_msg = "❌ ID must be number."
-        elif msg.startswith("/unpin") and session.get('is_admin', False):
-            parts = msg.split(" ", 1)
-            if len(parts) < 2:
-                formatted_msg = "❌ Usage: /unpin [message_id]"
-            else:
-                try:
-                    msg_id = int(parts[1])
-                    message = ChatMessage.query.get(msg_id)
-                    if message and message.is_pinned:
-                        message.is_pinned = False
-                        db.session.commit()
-                        pinned_message = None
-                        formatted_msg = f"📌 Message ID {msg_id} was unpinned."
-                    else:
-                        formatted_msg = f"❌ Message ID {msg_id} does not exist or is not pinned."
-                except ValueError:
-                    formatted_msg = "❌ ID must be number."
-        # Add more commands here as needed
-        else:
-            formatted_msg = f"Unrecognized command: {msg}"
-
-        send({
-            'html': formatted_msg,
-            'id': -1,
-            'author': "System",
-            'is_admin': session.get('is_admin', False)
-        }, broadcast=True)
-
-    else:
-        if msg.startswith("ANOUNCEMENT:") and session.get('is_admin', False):
-            msg = f"<span style='color: red;font-size: xx-large;'>{msg}</span>"
-    
-        message_content = msg
-    
-    # Store the raw message without extra formatting in the database
-        new_message = ChatMessage(username=username, message=message_content, timestamp=timestamp)
-        db.session.add(new_message)
-        log_to_discord(f"{server_id}. {username} sent message: {msg}")
-        db.session.commit()
- 
-        send({
-        'id': new_message.id,
-        'html': message_content,  # The content to display
-        'message': message_content,  # Original message
-        'author': username,
-        'timestamp': timestamp,
-        'is_admin': session.get('is_admin', False),
-        'rank': user.rank if user and user.rank else "",
-        'display_name': user.display_name if user and user.display_name else username,
-        'profile_picture': user.profile_picture if user and user.profile_picture else "/propic/default.png"
-    }, broadcast=True)
-
-@app.post("/tempban")
-def temp_ban():
-    if not session.get("is_admin"):
-        return "Forbiden", 403
-
-    user_id = request.form.get("user_id")
-    minutes = int(request.form.get("minutes", 0))
-    reason = request.form.get("reason", "No reason provided")
-
-    user = User.query.get(user_id)
-    if user:
-        user.is_banned = "Yes"
-        user.ban_reason = reason
-        user.ban_until = datetime.now() + timedelta(minutes=minutes) - timedelta(hours=2)  # Subtract 2 hours for UTC+2
-        db.session.commit()
-
-        log_entry = ban_log(
+    user.ban_until = ban_until.isoformat()
+    db.session.add(
+        ban_log(
             type="tempban",
             user=user.username,
             reason=reason,
-            admin=session["username"],
-            time=datetime.now().strftime("%H:%M:%S")
+            admin=admin_username,
+            time=datetime.now().strftime("%H:%M:%S"),
         )
-        db.session.add(log_entry)
-        db.session.commit()
+    )
+    db.session.commit()
+    return (
+        True,
+        f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] "
+        f"⏱️ <b>{escape(user.username)}</b> was temporarily banned until "
+        f"{ban_until.strftime('%Y-%m-%d %H:%M:%S UTC')}. Reason: <i>{escape(reason)}</i>",
+    )
 
-        msg = f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] ⏱️ User <b>{user.username}</b> was temporarily banned for {minutes} minutes. Reason: {reason}"
-        socketio.emit("message", {"html": msg, "id": -1, "author": "System"})
-    return redirect(url_for("admin_user_list"))
 
-@app.context_processor
-def inject_api_details():
+def command_response(html, room_key, broadcast=False, reload_room=False, update_pinned=False):
     return {
-        'api_url': 'https://tenor.googleapis.com/v2/search',
-        'api_key': TENOR_API_KEY, 
+        "html": html,
+        "room_key": room_key,
+        "broadcast": broadcast,
+        "reload_room": reload_room,
+        "update_pinned": update_pinned,
     }
 
-if __name__ == '__main__':
+
+def handle_command(message_text, room_key, user):
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    today = datetime.now().strftime("%Y-%m-%d")
+    if message_text.startswith("/version"):
+        return command_response(f"🤖 Version: {VERSION}", room_key)
+    if message_text.startswith("/date"):
+        return command_response(f"📅 {today}", room_key)
+    if message_text.startswith("/time"):
+        return command_response(f"⏰ {timestamp}", room_key)
+    if message_text.startswith("/help"):
+        return command_response(HELP_TEXT, room_key)
+    if message_text.startswith("/rules"):
+        return command_response(
+            "RULES: no spam, no illegal content, no harassment, report bugs to admins.",
+            room_key,
+        )
+    if message_text.startswith("/uptime"):
+        uptime = datetime.now() - start_time
+        hours, remainder = divmod(int(uptime.total_seconds()), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return command_response(f"🕒 App uptime: {hours}h {minutes}m {seconds}s", room_key)
+    if message_text.startswith("/server-uptime"):
+        return command_response(f"🖥️ Server uptime: {format_uptime(get_system_uptime())}", room_key)
+
+    if message_text.startswith("/clear"):
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        if not is_public_room(room_key):
+            return command_response("❌ /clear works only in public rooms.", room_key)
+        ChatMessage.query.filter(
+            ChatMessage.room_key == room_key,
+            ChatMessage.is_pinned.isnot(True),
+        ).delete(synchronize_session=False)
+        html = f"[<i>{timestamp}</i>] <b>{escape(user.username)}</b> cleared the room."
+        store_system_message(html, room_key)
+        log_to_discord(f"{SERVER_ID}. {user.username} cleared {room_key}")
+        emit_to_conversation("clear_chat", {"room_key": room_key}, room_key)
+        return command_response(html, room_key, reload_room=True)
+
+    if message_text.startswith("/pin"):
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        if not is_public_room(room_key):
+            return command_response("❌ /pin works only in public rooms.", room_key)
+        parts = message_text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].isdigit():
+            return command_response("❌ Usage: /pin message_id", room_key)
+        target_message = db.session.get(ChatMessage, int(parts[1]))
+        if not target_message or target_message.room_key != room_key:
+            return command_response("❌ Message not found in this room.", room_key)
+        target_message.is_pinned = True
+        db.session.commit()
+        emit_to_conversation("pinned_updated", {"room_key": room_key}, room_key)
+        return command_response(f"📌 Message #{target_message.id} pinned.", room_key, update_pinned=True)
+
+    if message_text.startswith("/unpin"):
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        if not is_public_room(room_key):
+            return command_response("❌ /unpin works only in public rooms.", room_key)
+        parts = message_text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].isdigit():
+            return command_response("❌ Usage: /unpin message_id", room_key)
+        target_message = db.session.get(ChatMessage, int(parts[1]))
+        if not target_message or target_message.room_key != room_key or not target_message.is_pinned:
+            return command_response("❌ Message is not pinned in this room.", room_key)
+        target_message.is_pinned = False
+        db.session.commit()
+        emit_to_conversation("pinned_updated", {"room_key": room_key}, room_key)
+        return command_response(f"📌 Message #{target_message.id} unpinned.", room_key, update_pinned=True)
+
+    if message_text.startswith("/ban"):
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        parts = message_text.split(" ", 2)
+        if len(parts) < 3:
+            return command_response("❌ Usage: /ban username reason", room_key)
+        target_user = User.query.filter_by(username=parts[1]).first()
+        reason = parts[2].strip()
+        if not target_user:
+            return command_response("❌ User does not exist.", room_key)
+        target_user.is_banned = "Yes"
+        target_user.ban_reason = reason
+        target_user.ban_until = None
+        db.session.add(
+            ban_log(
+                type="ban",
+                user=target_user.username,
+                reason=reason,
+                admin=user.username,
+                time=timestamp,
+            )
+        )
+        db.session.commit()
+        html = (
+            f"[<i>{timestamp}</i>] 🔨 <b>{escape(target_user.username)}</b> was banned. "
+            f"Reason: <i>{escape(reason)}</i>"
+        )
+        target_room = announcement_target(room_key)
+        store_system_message(html, target_room)
+        emit_to_user(target_user, "force_ban_redirect", {"reason": reason})
+        log_to_discord(f"{SERVER_ID}. {user.username} banned {target_user.username}")
+        return command_response(html, target_room, broadcast=True)
+
+    if message_text.startswith("/unban"):
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        parts = message_text.split(maxsplit=1)
+        if len(parts) < 2:
+            return command_response("❌ Usage: /unban username", room_key)
+        target_user = User.query.filter_by(username=parts[1].strip()).first()
+        if not target_user:
+            return command_response("❌ User does not exist.", room_key)
+        target_user.is_banned = "No"
+        target_user.ban_reason = None
+        target_user.ban_until = None
+        db.session.add(
+            ban_log(
+                type="unban",
+                user=target_user.username,
+                reason="unban",
+                admin=user.username,
+                time=timestamp,
+            )
+        )
+        db.session.commit()
+        html = f"[<i>{timestamp}</i>] 🔓 <b>{escape(target_user.username)}</b> was unbanned."
+        target_room = announcement_target(room_key)
+        store_system_message(html, target_room)
+        log_to_discord(f"{SERVER_ID}. {user.username} unbanned {target_user.username}")
+        return command_response(html, target_room, broadcast=True)
+
+    if message_text.startswith("/tempban"):
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        parts = message_text.split()
+        if len(parts) < 4:
+            return command_response("❌ Usage: /tempban @username 30m reason", room_key)
+        target = parts[1].lstrip("@")
+        duration = parts[2]
+        reason = " ".join(parts[3:])
+        success, html = temp_ban_user(target, duration, reason, user.username)
+        if not success:
+            return command_response(f"❌ {html}", room_key)
+        target_room = announcement_target(room_key)
+        store_system_message(html, target_room)
+        target_user = User.query.filter_by(username=target).first()
+        if target_user:
+            emit_to_user(
+                target_user,
+                "force_ban_redirect",
+                {"reason": reason, "ban_until": target_user.ban_until},
+            )
+        log_to_discord(f"{SERVER_ID}. {user.username} temp banned {target}")
+        return command_response(html, target_room, broadcast=True)
+
+    if message_text.startswith("/makeadmin") and user.username == "System":
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        parts = message_text.split(maxsplit=1)
+        if len(parts) < 2:
+            return command_response("❌ Usage: /makeadmin username", room_key)
+        target_user = User.query.filter_by(username=parts[1].strip()).first()
+        if not target_user:
+            return command_response("❌ User does not exist.", room_key)
+        target_user.is_admin = "1"
+        db.session.commit()
+        socketio.emit("refresh_page")
+        target_room = announcement_target(room_key)
+        html = f"🛡️ {escape(target_user.username)} is now an admin."
+        store_system_message(html, target_room)
+        return command_response(html, target_room, broadcast=True)
+
+    if message_text.startswith("/deladmin") and user.username == "System":
+        if not user.is_admin_user:
+            return command_response("❌ Admin only.", room_key)
+        parts = message_text.split(maxsplit=1)
+        if len(parts) < 2:
+            return command_response("❌ Usage: /deladmin username", room_key)
+        target_user = User.query.filter_by(username=parts[1].strip()).first()
+        if not target_user:
+            return command_response("❌ User does not exist.", room_key)
+        target_user.is_admin = "0"
+        db.session.commit()
+        socketio.emit("refresh_page")
+        target_room = announcement_target(room_key)
+        html = f"🛡️ {escape(target_user.username)} is no longer an admin."
+        store_system_message(html, target_room)
+        return command_response(html, target_room, broadcast=True)
+
+    return command_response(f"❌ Unknown command: {escape(message_text)}", room_key)
+
+
+@app.before_request
+def enforce_ban_on_http_routes():
+    if not current_user.is_authenticated:
+        return None
+    if request.endpoint in {
+        "static",
+        "login",
+        "ban",
+        "profile_pic",
+        "set_language",
+        "brand_logo",
+    }:
+        return None
+    refresh_ban_status(current_user)
+    if current_user.is_banned_user:
+        session["language"] = current_user.language or session.get("language", "sk")
+        return ban_redirect(current_user)
+    return None
+
+
+@app.context_processor
+def inject_template_context():
+    return {
+        "api_url": "https://tenor.googleapis.com/v2/search",
+        "api_key": TENOR_API_KEY,
+        "app_name": APP_NAME,
+        "app_initials": APP_INITIALS,
+        "version": VERSION,
+        "available_languages": AVAILABLE_LANGUAGES,
+        "ui_language": get_language(),
+        "translations": TRANSLATIONS,
+        "t": t,
+    }
+
+
+@app.get("/brand/<variant>.svg")
+def brand_logo(variant):
+    if variant == "wordmark":
+        svg = render_template(
+            "branding/wordmark.svg",
+            app_name=APP_NAME,
+            app_initials=APP_INITIALS,
+            brand_width=get_brand_wordmark_width(APP_NAME),
+        )
+    elif variant == "mark":
+        svg = render_template(
+            "branding/mark.svg",
+            app_name=APP_NAME,
+            app_initials=APP_INITIALS,
+        )
+    else:
+        abort(404)
+
+    response = Response(svg, mimetype="image/svg+xml")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/", methods=["GET", "POST"])
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        refresh_ban_status(current_user)
+        if current_user.is_banned_user:
+            return ban_redirect(current_user)
+        return redirect(url_for("chat"))
+
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        remember = request.form.get("remember") == "on"
+        user = User.query.filter_by(username=username).first()
+
+        if not user or not check_password_hash(user.password, password):
+            error = t("login.invalid")
+        else:
+            refresh_ban_status(user)
+            if user.is_banned_user:
+                session["language"] = user.language or session.get("language", "en")
+                return ban_redirect(user)
+            login_user(user, remember=remember)
+            session["language"] = user.language or session.get("language", "en")
+            create_ip_log(user)
+            next_target = safe_redirect_target(
+                request.form.get("next") or request.args.get("next"),
+                url_for("chat"),
+            )
+            return redirect(next_target)
+
+    return render_template("login.html", error=error, next_url=request.args.get("next", ""))
+
+
+@app.route("/logout")
+def logout():
+    language = get_language()
+    if current_user.is_authenticated:
+        logout_user()
+    session["language"] = language
+    return redirect(url_for("login"))
+
+
+@app.post("/set_language")
+def set_language():
+    selected = request.form.get("language", "sk")
+    if selected not in AVAILABLE_LANGUAGES:
+        selected = "sk"
+    session["language"] = selected
+    if current_user.is_authenticated:
+        current_user.language = selected
+        db.session.commit()
+    next_target = safe_redirect_target(
+        request.form.get("next") or request.referrer,
+        url_for("chat" if current_user.is_authenticated else "login"),
+    )
+    return redirect(next_target)
+
+
+@app.route("/ban")
+def ban():
+    return render_template(
+        "banned.html",
+        ban_reason=request.args.get("ban_reason", "No reason provided."),
+        ban_until=request.args.get("ban_until"),
+    )
+
+
+@app.route("/chat")
+@login_required
+def chat():
+    direct_users = User.query.filter(User.id != current_user.id).order_by(User.username.asc()).all()
+    room_payload = [
+        {"key": room["key"], "icon": room["icon"], "label": t(room["label_key"])}
+        for room in CHAT_ROOMS
+    ]
+    return render_template(
+        "chat.html",
+        chat_rooms=room_payload,
+        direct_users=[serialize_user_summary(user) for user in direct_users],
+        current_user_payload=serialize_user_summary(current_user),
+        ui_messages={
+            "uploading": t("chat.uploading"),
+            "upload_error": t("chat.upload_error"),
+            "no_messages": t("chat.no_messages"),
+            "search_placeholder": t("chat.search_gif_placeholder"),
+            "no_gifs": t("chat.no_gifs"),
+            "gif_error": t("chat.gif_error"),
+            "chat_pm_with": t("chat.pm_with"),
+            "chat_room": t("chat.room"),
+            "chat_pinned": t("chat.pinned"),
+            "chat_online": t("chat.online"),
+        },
+    )
+
+
+@app.route("/propic/<filename>")
+def profile_pic(filename):
+    return send_from_directory(os.path.join(app.root_path, "propic"), filename)
+
+
+@app.route("/history")
+@login_required
+def get_history():
+    room_key = request.args.get("conversation", ANNOUNCEMENT_ROOM)
+    if not can_access_conversation(room_key, current_user):
+        return jsonify({"error": "Forbidden"}), 403
+    return jsonify(load_history(room_key))
+
+
+@app.route("/pinned")
+@login_required
+def pinned():
+    room_key = request.args.get("conversation", ANNOUNCEMENT_ROOM)
+    if not can_access_conversation(room_key, current_user):
+        return jsonify({"error": "Forbidden"}), 403
+    pinned_message = get_pinned_message(room_key)
+    if not pinned_message:
+        return jsonify({"pinned": None})
+    return jsonify({"pinned": serialize_message(pinned_message)})
+
+
+@app.route("/stats/online_count")
+@login_required
+def online_count():
+    total_users = User.query.filter(User.username != "System").count()
+    return jsonify({"online": len(online_users), "total": total_users})
+
+
+@app.route("/change_password", methods=["GET", "POST"])
+@login_required
+def change_password():
+    if request.method == "POST":
+        old_password = request.form.get("old_password", "")
+        new_password = request.form.get("new_password", "")
+        if not check_password_hash(current_user.password, old_password):
+            return t("password.invalid_old"), 403
+        current_user.password = generate_password_hash(new_password)
+        db.session.commit()
+        log_to_discord(f"{SERVER_ID}. {current_user.username} changed password")
+        return t("password.updated")
+    return render_template("change_password.html")
+
+
+@app.route("/add_user", methods=["GET", "POST"])
+@admin_required
+def add_user():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        rank = request.form.get("rank", "").strip()
+        display_name = request.form.get("display_name", "").strip()
+        language = request.form.get("language", "sk")
+
+        if User.query.filter_by(username=username).first():
+            return "User already exists.", 409
+        if language not in AVAILABLE_LANGUAGES:
+            language = "sk"
+
+        user = User(
+            username=username,
+            password=generate_password_hash(password),
+            rank=rank,
+            display_name=display_name or username,
+            is_admin="0",
+            is_banned="No",
+            language=language,
+            profile_picture="/propic/default.png",
+        )
+        db.session.add(user)
+        db.session.commit()
+        log_to_discord(f"{SERVER_ID}. Admin {current_user.username} added user {username}")
+        socketio.emit("refresh_page")
+        return redirect(url_for("admin_user_list"))
+
+    return render_template("add_user.html")
+
+
+@app.route("/user/<int:user_id>", methods=["GET", "POST"])
+@login_required
+def user_profile(user_id):
+    user = db.session.get(User, user_id)
+    if not user:
+        abort(404)
+
+    if request.method == "POST":
+        if current_user.id != user.id:
+            abort(403)
+
+        display_name = request.form.get("display_name", "").strip()
+        language = request.form.get("language", user.language or "sk")
+        if display_name:
+            user.display_name = display_name
+        if language in AVAILABLE_LANGUAGES:
+            user.language = language
+            session["language"] = language
+
+        file = request.files.get("profile_pic")
+        if file and file.filename:
+            propic_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "propic")
+            os.makedirs(propic_dir, exist_ok=True)
+            filename = secure_filename(f"user_{user.id}.png")
+            file.save(os.path.join(propic_dir, filename))
+            user.profile_picture = f"/propic/{filename}"
+            log_to_discord(f"{SERVER_ID}. {current_user.username} changed profile picture")
+
+        db.session.commit()
+        socketio.emit("refresh_page")
+        return redirect(url_for("user_profile", user_id=user.id))
+
+    return render_template("user_profile.html", user=user)
+
+
+@app.route("/admin/users")
+@admin_required
+def admin_user_list():
+    users = User.query.order_by(User.id.asc()).all()
+    return render_template("admin_users.html", users=users)
+
+
+@app.post("/update_rank")
+@admin_required
+def update_rank():
+    user = db.session.get(User, int(request.form.get("user_id", 0)))
+    if user:
+        user.rank = request.form.get("new_rank", "").strip()
+        db.session.commit()
+        html = (
+            f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] 🏅 "
+            f"Admin <b>{escape(current_user.username)}</b> changed rank of "
+            f"<b>{escape(user.username)}</b> to <b>{escape(user.rank or '-')}</b>."
+        )
+        message = store_system_message(html, ANNOUNCEMENT_ROOM)
+        emit_to_conversation("message", serialize_message(message), ANNOUNCEMENT_ROOM)
+        log_to_discord(f"{SERVER_ID}. {current_user.username} changed rank of {user.username} to {user.rank}")
+        socketio.emit("refresh_page")
+    return redirect(url_for("admin_user_list"))
+
+
+@app.post("/ban_user")
+@admin_required
+def ban_user():
+    user = db.session.get(User, int(request.form.get("user_id", 0)))
+    reason = request.form.get("reason", "No reason provided").strip()
+    if user:
+        user.is_banned = "Yes"
+        user.ban_reason = reason
+        user.ban_until = None
+        db.session.add(
+            ban_log(
+                type="ban",
+                user=user.username,
+                reason=reason,
+                admin=current_user.username,
+                time=datetime.now().strftime("%H:%M:%S"),
+            )
+        )
+        db.session.commit()
+        html = (
+            f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] ⛔ "
+            f"<b>{escape(user.username)}</b> was banned by "
+            f"<b>{escape(current_user.username)}</b>. Reason: <i>{escape(reason)}</i>"
+        )
+        message = store_system_message(html, ANNOUNCEMENT_ROOM)
+        emit_to_conversation("message", serialize_message(message), ANNOUNCEMENT_ROOM)
+        emit_to_user(user, "force_ban_redirect", {"reason": reason})
+        log_to_discord(f"{SERVER_ID}. {current_user.username} banned {user.username}")
+    return redirect(url_for("admin_user_list"))
+
+
+@app.post("/unban_user")
+@admin_required
+def unban_user():
+    user = db.session.get(User, int(request.form.get("user_id", 0)))
+    if user:
+        user.is_banned = "No"
+        user.ban_reason = None
+        user.ban_until = None
+        db.session.add(
+            ban_log(
+                type="unban",
+                user=user.username,
+                reason="unban",
+                admin=current_user.username,
+                time=datetime.now().strftime("%H:%M:%S"),
+            )
+        )
+        db.session.commit()
+        html = f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] 🔓 <b>{escape(user.username)}</b> was unbanned."
+        message = store_system_message(html, ANNOUNCEMENT_ROOM)
+        emit_to_conversation("message", serialize_message(message), ANNOUNCEMENT_ROOM)
+        log_to_discord(f"{SERVER_ID}. {current_user.username} unbanned {user.username}")
+    return redirect(url_for("admin_user_list"))
+
+
+@app.post("/tempban")
+@admin_required
+def temp_ban():
+    user = db.session.get(User, int(request.form.get("user_id", 0)))
+    minutes = int(request.form.get("minutes", 0))
+    reason = request.form.get("reason", "No reason provided").strip()
+    if user and minutes > 0:
+        ban_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        user.is_banned = "Yes"
+        user.ban_reason = reason
+        user.ban_until = ban_until.isoformat()
+        db.session.add(
+            ban_log(
+                type="tempban",
+                user=user.username,
+                reason=reason,
+                admin=current_user.username,
+                time=datetime.now().strftime("%H:%M:%S"),
+            )
+        )
+        db.session.commit()
+        html = (
+            f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] ⏱️ "
+            f"<b>{escape(user.username)}</b> was temporarily banned for {minutes} minutes. "
+            f"Reason: <i>{escape(reason)}</i>"
+        )
+        message = store_system_message(html, ANNOUNCEMENT_ROOM)
+        emit_to_conversation("message", serialize_message(message), ANNOUNCEMENT_ROOM)
+        emit_to_user(user, "force_ban_redirect", {"reason": reason, "ban_until": user.ban_until})
+        log_to_discord(f"{SERVER_ID}. {current_user.username} temp banned {user.username}")
+    return redirect(url_for("admin_user_list"))
+
+
+@app.post("/delete_user")
+@admin_required
+def delete_user():
+    user = db.session.get(User, int(request.form.get("user_id", 0)))
+    if not user:
+        return redirect(url_for("admin_user_list"))
+    if user.id == current_user.id:
+        return t("admin.delete_blocked"), 403
+
+    sid_set = set(user_sid_map.get(user.username, set()))
+    online_users.discard(user.username)
+    user_sid_map.pop(user.username, None)
+    user_connection_counts.pop(user.username, None)
+
+    ChatMessage.query.filter(
+        or_(
+            ChatMessage.username == user.username,
+            ChatMessage.room_key.like(f"pm:{user.id}:%"),
+            ChatMessage.room_key.like(f"pm:%:{user.id}"),
+        )
+    ).delete(synchronize_session=False)
+    IPLog.query.filter_by(username=user.username).delete(synchronize_session=False)
+    ban_log.query.filter(
+        or_(ban_log.user == user.username, ban_log.admin == user.username)
+    ).delete(synchronize_session=False)
+    db.session.delete(user)
+    db.session.commit()
+
+    for sid in sid_set:
+        socketio.emit("force_logout", {"reason": "account_deleted"}, room=sid)
+
+    log_to_discord(f"{SERVER_ID}. {current_user.username} deleted user {user.username}")
+    socketio.emit("refresh_page")
+    return redirect(url_for("admin_user_list"))
+
+
+@app.route("/upload", methods=["POST"])
+@login_required
+def upload_file():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    upload_folder = os.path.join(app.root_path, "uploads")
+    os.makedirs(upload_folder, exist_ok=True)
+    filename = f"{int(time.time())}_{secure_filename(file.filename)}"
+    file.save(os.path.join(upload_folder, filename))
+    return jsonify({"file_url": url_for("uploaded_file", filename=filename)})
+
+
+@app.route("/uploads/<filename>")
+@login_required
+def uploaded_file(filename):
+    return send_from_directory(os.path.join(app.root_path, "uploads"), filename)
+
+
+def hourly_broadcast():
+    while True:
+        time.sleep(1800)
+        with app.app_context():
+            html = random.choice(
+                [
+                    "💡 Tip: use /help to list available commands.",
+                    "📌 Pinned messages survive /clear in the current room.",
+                    "🛡️ Contact an admin if you hit a moderation issue.",
+                    f"📅 Today is {datetime.now().strftime('%Y-%m-%d')}.",
+                    f"⏰ Current time is {datetime.now().strftime('%H:%M:%S')}.",
+                    f"👥 Online now: {len(online_users)}.",
+                ]
+            )
+            message = store_system_message(
+                f"[<i>{datetime.now().strftime('%H:%M:%S')}</i>] 🤖 <i>{html}</i>",
+                ANNOUNCEMENT_ROOM,
+            )
+            emit_to_conversation("message", serialize_message(message), ANNOUNCEMENT_ROOM)
+
+
+@socketio.on("connect")
+def handle_connect():
+    if not current_user.is_authenticated:
+        return False
+
+    refresh_ban_status(current_user)
+    if current_user.is_banned_user:
+        emit(
+            "force_ban_redirect",
+            {"reason": current_user.ban_reason or "No reason", "ban_until": current_user.ban_until},
+        )
+        disconnect()
+        return
+
+    username = current_user.username
+    user_sid_map[username].add(request.sid)
+    user_connection_counts[username] += 1
+    join_room(personal_room(current_user.id))
+    for room in CHAT_ROOMS:
+        join_room(room["key"])
+
+    if user_connection_counts[username] == 1:
+        online_users.add(username)
+
+
+@socketio.on("disconnect")
+def handle_disconnect():
+    if not current_user.is_authenticated:
+        return
+
+    username = current_user.username
+    sid_set = user_sid_map.get(username)
+    if sid_set and request.sid in sid_set:
+        sid_set.discard(request.sid)
+        if not sid_set:
+            user_sid_map.pop(username, None)
+
+    if username in user_connection_counts:
+        user_connection_counts[username] -= 1
+        if user_connection_counts[username] <= 0:
+            user_connection_counts.pop(username, None)
+            online_users.discard(username)
+
+
+@socketio.on("delete_message")
+def handle_delete_message(data):
+    if not current_user.is_authenticated:
+        return
+
+    message_id = data.get("id")
+    message = db.session.get(ChatMessage, int(message_id)) if str(message_id).isdigit() else None
+    if not is_delete_allowed(message, current_user):
+        return
+    room_key = message.room_key or ANNOUNCEMENT_ROOM
+    was_pinned = bool(message.is_pinned)
+    db.session.delete(message)
+    db.session.commit()
+    emit_to_conversation("delete_message", {"id": message.id, "room_key": room_key}, room_key)
+    if was_pinned:
+        emit_to_conversation("pinned_updated", {"room_key": room_key}, room_key)
+
+
+@socketio.on("message")
+def handle_message(payload):
+    if not current_user.is_authenticated:
+        disconnect()
+        return
+
+    refresh_ban_status(current_user)
+    if current_user.is_banned_user:
+        emit(
+            "force_ban_redirect",
+            {"reason": current_user.ban_reason or "No reason", "ban_until": current_user.ban_until},
+        )
+        disconnect()
+        return
+
+    if isinstance(payload, str):
+        payload = {"message": payload, "conversation": ANNOUNCEMENT_ROOM}
+
+    room_key = payload.get("conversation", ANNOUNCEMENT_ROOM)
+    message_text = payload.get("message", "").strip()
+    if not can_access_conversation(room_key, current_user) or not message_text:
+        return
+
+    if message_text.startswith("/"):
+        result = handle_command(message_text, room_key, current_user)
+        if result["broadcast"]:
+            message = (
+                ChatMessage.query.filter_by(room_key=result["room_key"])
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            if message:
+                emit_to_conversation("message", serialize_message(message), result["room_key"])
+        else:
+            emit("message", build_system_payload(result["html"], room_key))
+        return
+
+    html = prepare_user_message(message_text, current_user.is_admin_user)
+    if not html:
+        return
+
+    message = ChatMessage(
+        username=current_user.username,
+        message=html,
+        formatted_message=html,
+        timestamp=datetime.now().strftime("%H:%M:%S"),
+        room_key=room_key,
+    )
+    db.session.add(message)
+    db.session.commit()
+    log_to_discord(f"{SERVER_ID}. {current_user.username} sent message in {room_key}: {message_text}")
+    emit_to_conversation("message", serialize_message(message), room_key)
+
+
+if __name__ == "__main__":
     threading.Thread(target=hourly_broadcast, daemon=True).start()
-    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-    socketio.run(app, host='0.0.0.0', port=5000, debug=debug_mode)
+    debug_mode = (
+        os.getenv("FLASK_DEBUG", "False").lower() == "true"
+        or config.get("FLASK_DEBUG", "False") == "True"
+    )
+    socketio.run(app, host="0.0.0.0", port=5000, debug=debug_mode)

@@ -1,12 +1,6 @@
-flask
-flask-socketio
-sqlalchemy
-werkzeug
-psutil
-requests
-eventlet
 eventlet
 flask
+flask-login
 flask-socketio
 flask-sqlalchemy
 psutil
