@@ -5,3 +5,11 @@ werkzeug
 psutil
 requests
 eventlet
+eventlet
+flask
+flask-socketio
+flask-sqlalchemy
+psutil
+requests
+sqlalchemy
+werkzeug
