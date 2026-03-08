@@ -27,5 +27,5 @@
 
   <text x="124" y="58" fill="#F7FBFD" font-family="'Segoe UI', Arial, sans-serif" font-size="34" font-weight="800" letter-spacing="0.4">{{ app_name }}</text>
   <rect x="126" y="74" width="82" height="4" rx="2" fill="#F5B24A" fill-opacity="0.92" />
-  <text x="124" y="94" fill="#D5E4EC" font-family="Consolas, 'Courier New', monospace" font-size="11" letter-spacing="3">IntraChat by AdrianSimo.eu</text>
+  <text x="124" y="94" fill="#D5E4EC" font-family="Consolas, 'Courier New', monospace" font-size="11" letter-spacing="3">IntraChat by adriansimo.eu</text>
 </svg>
