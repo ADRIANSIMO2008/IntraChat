@@ -138,6 +138,7 @@
         const appName = {{ app_name | tojson }};
         const currentUser = {{ current_user_payload | tojson }};
         const ui = {{ ui_messages | tojson }};
+        const gifSearch = {{ gif_search | tojson }};
         let currentConversation = null;
 
         function restoreTheme() {
@@ -370,44 +371,107 @@
 
         function closeGIFModal() {
             document.getElementById("gifModal").classList.add("hidden");
+            document.getElementById("gifSearchInput").value = "";
             document.getElementById("gifResults").innerHTML = "";
         }
 
-        function searchGIFInModal() {
+        function buildGIFSearchUrl(query) {
+            if (!gifSearch.api_url || !gifSearch.api_key) {
+                return null;
+            }
+
+            const url = new URL(gifSearch.api_url);
+            url.searchParams.set("q", query);
+            //url.searchParams.set("limit", "24");
+
+            if (gifSearch.provider === "tenor") {
+                url.searchParams.set("key", gifSearch.api_key);
+                url.searchParams.set("client_key", gifSearch.client_key || appName);
+                url.searchParams.set("media_filter", "gif");
+                url.searchParams.set("contentfilter", "medium");
+                return url.toString();
+            }
+
+            url.searchParams.set("api_key", gifSearch.api_key);
+            url.searchParams.set("rating", "pg-13");
+            return url.toString();
+        }
+
+        function extractGIFUrls(data) {
+            if (Array.isArray(data?.results)) {
+                return data.results
+                    .map((result) =>
+                        result?.media_formats?.gif?.url
+                        || result?.media_formats?.mediumgif?.url
+                        || result?.media_formats?.tinygif?.url
+                    )
+                    .filter(Boolean);
+            }
+
+            if (Array.isArray(data?.data)) {
+                return data.data
+                    .map((result) =>
+                        result?.images?.fixed_width?.url
+                        || result?.images?.downsized_medium?.url
+                        || result?.images?.original?.url
+                    )
+                    .filter(Boolean);
+            }
+
+            return [];
+        }
+
+        async function searchGIFInModal() {
             const query = document.getElementById("gifSearchInput").value.trim();
             const results = document.getElementById("gifResults");
             if (!query) {
                 return;
             }
 
+            const requestUrl = buildGIFSearchUrl(query);
+            if (!requestUrl) {
+                results.innerHTML = `<p>${ui.gif_error}</p>`;
+                return;
+            }
+
             results.innerHTML = "<p>...</p>";
-            fetch(`https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key={{ api_key }}&limit=12`)
-                .then((response) => response.json())
-                .then((data) => {
-                    results.innerHTML = "";
-                    if (!data.results || data.results.length === 0) {
-                        results.innerHTML = `<p>${ui.no_gifs}</p>`;
-                        return;
-                    }
-                    const grid = document.createElement("div");
-                    grid.className = "gif-grid";
-                    data.results.forEach((result) => {
-                        const url = result.media_formats.gif.url;
-                        const button = document.createElement("button");
-                        button.type = "button";
-                        button.className = "gif-tile";
-                        button.innerHTML = `<img src="${url}" alt="gif">`;
-                        button.onclick = () => sendGIF(url);
-                        grid.appendChild(button);
-                    });
-                    results.appendChild(grid);
-                })
-                .catch(() => {
-                    results.innerHTML = `<p>${ui.gif_error}</p>`;
+            try {
+                const response = await fetch(requestUrl);
+                if (!response.ok) {
+                    throw new Error("gif_search_failed");
+                }
+
+                const data = await response.json();
+                const urls = extractGIFUrls(data);
+                results.innerHTML = "";
+                if (urls.length === 0) {
+                    results.innerHTML = `<p>${ui.no_gifs}</p>`;
+                    return;
+                }
+
+                const grid = document.createElement("div");
+                grid.className = "gif-grid";
+                urls.forEach((url) => {
+                    const button = document.createElement("button");
+                    const image = document.createElement("img");
+                    button.type = "button";
+                    button.className = "gif-tile";
+                    image.src = url;
+                    image.alt = "gif";
+                    button.appendChild(image);
+                    button.onclick = () => sendGIF(url);
+                    grid.appendChild(button);
                 });
+                results.appendChild(grid);
+            } catch {
+                results.innerHTML = `<p>${ui.gif_error}</p>`;
+            }
         }
 
         function sendGIF(url) {
+            if (!currentConversation) {
+                return;
+            }
             socket.emit("message", { message: `<img src="${url}" alt="GIF">`, conversation: currentConversation });
             closeGIFModal();
         }

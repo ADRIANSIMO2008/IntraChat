@@ -154,9 +154,49 @@ APP_INITIALS = get_app_initials(APP_NAME)
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", config.get("discord_webhook_url", ""))
 SERVER_ID = os.getenv("SERVER_ID", config.get("server_id", "default_server"))
-TENOR_API_KEY = os.getenv("TENOR_API_KEY", config.get("tenor_api_key", ""))
+TENOR_API_KEY = str(os.getenv("TENOR_API_KEY", config.get("tenor_api_key", ""))).strip()
+GIPHY_API_KEY = str(os.getenv("GIPHY_API_KEY", config.get("giphy_api_key", ""))).strip()
+GIF_PROVIDER = str(os.getenv("GIF_PROVIDER", config.get("gif_provider", ""))).strip().lower()
+TENOR_CLIENT_KEY = re.sub(
+    r"[^A-Za-z0-9_-]+",
+    "-",
+    str(os.getenv("TENOR_CLIENT_KEY", config.get("tenor_client_key", APP_NAME))).strip(),
+).strip("-") or "intrachat"
 CHAT_ROOMS = config.get("chat_rooms", DEFAULT_CHAT_ROOMS)
 ROOMS_BY_KEY = {room["key"]: room for room in CHAT_ROOMS}
+
+
+def resolve_gif_search():
+    providers = []
+    if GIF_PROVIDER in {"tenor", "giphy"}:
+        providers.append(GIF_PROVIDER)
+    providers.extend(provider for provider in ("tenor", "giphy") if provider not in providers)
+
+    for provider in providers:
+        if provider == "tenor" and TENOR_API_KEY:
+            return {
+                "provider": "tenor",
+                "api_url": "https://tenor.googleapis.com/v2/search",
+                "api_key": TENOR_API_KEY,
+                "client_key": TENOR_CLIENT_KEY,
+            }
+        if provider == "giphy" and GIPHY_API_KEY:
+            return {
+                "provider": "giphy",
+                "api_url": "https://api.giphy.com/v1/gifs/search",
+                "api_key": GIPHY_API_KEY,
+                "client_key": "",
+            }
+
+    return {
+        "provider": "none",
+        "api_url": "",
+        "api_key": "",
+        "client_key": "",
+    }
+
+
+GIF_SEARCH = resolve_gif_search()
 
 start_time = datetime.now()
 online_users = set()
@@ -782,8 +822,9 @@ def enforce_ban_on_http_routes():
 @app.context_processor
 def inject_template_context():
     return {
-        "api_url": "https://tenor.googleapis.com/v2/search",
-        "api_key": TENOR_API_KEY,
+        "api_url": GIF_SEARCH["api_url"],
+        "api_key": GIF_SEARCH["api_key"],
+        "gif_search": GIF_SEARCH,
         "app_name": APP_NAME,
         "app_initials": APP_INITIALS,
         "version": VERSION,

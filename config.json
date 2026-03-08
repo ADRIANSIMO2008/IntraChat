@@ -1,8 +1,8 @@
 {
   "app_name": "IntraChat",
-  "discord_webhook_url": "discord_webhook_url_HERE",
+  "discord_webhook_url": "",
   "server_id": "IntraServer1",
-  "tenor_api_key": "tenor_api_key_HERE",
+  "giphy_api_key": "",
   "FLASK_SECRET_KEY": "",
   "FLASK_DEBUG": ""
 }
